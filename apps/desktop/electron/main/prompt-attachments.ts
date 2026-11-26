@@ -79,11 +79,44 @@ type PromptPath = {
   root: "project" | "scratch" | "attachment";
 };
 
+/** Recording containers `audio/transcriptions` endpoints commonly accept. */
+const AUDIO_EXTENSIONS = new Set([
+  "aac", "aiff", "amr", "flac", "m4a", "m4b", "mp3", "oga", "ogg", "opus", "wav", "wma",
+]);
+
 export type PreparedPromptAttachment = {
   message: MessageAttachment;
   fallbackPath: string;
   inlineData?: string;
+  /**
+   * Text of an attached recording, when transcription is configured. The agent
+   * cannot hear, so without this the attachment travels as a bare path.
+   */
+  transcript?: { text: string; chunks: number; converted: boolean };
+  /** Why transcription did not happen, stated in the prompt rather than swallowed. */
+  transcriptError?: string;
 };
+
+export type PromptAttachmentOptions = {
+  /** Transcribe one recording; resolve with `{ error }` instead of throwing when it fails. */
+  transcribeAudio?: (input: {
+    path: string;
+    mimeType?: string;
+    name: string;
+  }) => Promise<
+    { text: string; chunks: number; converted: boolean } | { error: string }
+  >;
+};
+
+function isAudioPromptAttachment(
+  attachment: AgentPromptAttachment,
+  path: string,
+): boolean {
+  const mimeType = promptMimeType(path, attachment.mimeType, attachment.name);
+  if (mimeType.startsWith("audio/")) return true;
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  return AUDIO_EXTENSIONS.has(extension);
+}
 
 function pathInside(root: string, candidate: string): boolean {
   const child = relative(root, candidate);
@@ -244,6 +277,7 @@ export async function preparePromptAttachments(
    * in the prompt, instead of being appended after the body.
    */
   promptContent: string,
+  options?: PromptAttachmentOptions,
 ): Promise<PreparedPromptAttachment[]> {
   const prepared: PreparedPromptAttachment[] = [];
   if (attachments.filter(attachment => attachment.lineRange !== undefined).length > MAX_FILE_LINE_REFERENCES) {
@@ -298,7 +332,7 @@ export async function preparePromptAttachments(
     const mimeType = promptMimeType(source.absolute, attachment.mimeType, name);
     const isImage = isImagePromptAttachment(attachment, source.absolute);
     if (!isImage) {
-      prepared.push({
+      const entry: PreparedPromptAttachment = {
         message: {
           kind: "file",
           name,
@@ -309,7 +343,23 @@ export async function preparePromptAttachments(
         fallbackPath: mimeType === SVG_MIME_TYPE && source.root === "attachment"
           ? await fallbackPathForStoredAttachment(dataRoot, sessionId, source, name)
           : displayPromptPath(source, projectPath),
-      });
+      };
+      // A recording becomes text before the prompt is sent; the file reference
+      // stays, so the agent can still reach the original audio.
+      if (options?.transcribeAudio && isAudioPromptAttachment(attachment, source.absolute)) {
+        try {
+          const result = await options.transcribeAudio({
+            path: source.absolute,
+            mimeType,
+            name,
+          });
+          if ("error" in result) entry.transcriptError = result.error;
+          else entry.transcript = result;
+        } catch (error) {
+          entry.transcriptError = (error as Error).message ?? String(error);
+        }
+      }
+      prepared.push(entry);
       continue;
     }
 
@@ -398,7 +448,21 @@ export function appendPromptFallbackPaths(
     .map((attachment) => formatFileInsert(attachment.fallbackPath, "file"))
     .join("")
     .trim();
+  const transcripts = attachments
+    .filter((attachment) => attachment.transcript || attachment.transcriptError)
+    .map((attachment) => {
+      const label = attachment.message.name;
+      if (!attachment.transcript) {
+        return `[录音转写失败：${label}｜${attachment.transcriptError}]`;
+      }
+      const { chunks, converted } = attachment.transcript;
+      const how = [label, `${chunks} 段`, converted ? "已用 ffmpeg 重编码" : "原音频"]
+        .join("｜");
+      return `[录音转写：${how}｜自动语音识别，专有名词可能有误]\n${attachment.transcript.text}`;
+    })
+    .join("\n\n");
   const text = content.trim();
-  return appendLocalFileReferenceContext([text, paths].filter(Boolean).join("\n"),
+  return appendLocalFileReferenceContext(
+    [text, paths, transcripts].filter(Boolean).join("\n"),
     attachments.map(attachment => ({ ...attachment.message, path: attachment.fallbackPath })));
 }

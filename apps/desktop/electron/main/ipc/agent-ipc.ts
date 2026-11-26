@@ -7,7 +7,9 @@ import { modeContinuationOrigin, type ModeRunCoordinator, type PreparedModeTurn 
 import { toSidecarModeDefinition } from "../runtime/mode-sidecar-definition";
 import { goalPromptMode, goalStartRequested } from "../runtime/goal-start";
 import { expandSlashInvocation, visionFromModelConfig, type ComposerTemplate } from "@pi-desktop/agent-runtime";
-import { appendPromptFallbackPaths, durableUserMessageId, preparePromptAttachments, type PreparedPromptAttachment } from "../prompt-attachments";
+import { join } from "node:path";
+import { appendPromptFallbackPaths, durableUserMessageId, preparePromptAttachments, type PreparedPromptAttachment, type PromptAttachmentOptions } from "../prompt-attachments";
+import { readAudioConfig, transcribeAudioAttachment } from "../audio-transcription";
 import { resolveSessionReferences } from "../session-references";
 import { resolvePromptAgentMentions } from "../agent-mentions";
 import { executionFromResponse, resolveSessionMessageInput } from "@pi-desktop/host-runtime";
@@ -122,6 +124,50 @@ export function registerAgentIpc({
   loadComposerTemplatesCached,
   modeRuns,
 }: AgentIpcDependencies): void {
+  /**
+   * Audio transcription for one prompt, or nothing.
+   *
+   * The agent cannot hear, so a recording is transcribed before the prompt is
+   * sent — but only when the user pointed `audio-transcription.json` at an
+   * OpenAI-compatible endpoint. Without it the attachment keeps travelling as a
+   * file reference, exactly as before.
+   */
+  const promptAttachmentOptions = (
+    sessionId: string,
+  ): PromptAttachmentOptions | undefined => {
+    let config;
+    try {
+      config = readAudioConfig(dataDir);
+    } catch (error) {
+      logger.app("runtime", "warn", "audio transcription config unreadable", {
+        data: String(error),
+      });
+      return undefined;
+    }
+    if (!config) return undefined;
+    const scratchDir = join(dataDir, "scratch", sessionId);
+    return {
+      transcribeAudio: async (input) => {
+        try {
+          const result = await transcribeAudioAttachment({
+            path: input.path,
+            mimeType: input.mimeType,
+            config,
+            scratchDir,
+            log: (message) => logger.app("runtime", "info", message),
+          });
+          logger.app("runtime", "info", "transcribed attachment", {
+            data: { chunks: result.chunks, chars: result.text.length },
+          });
+          return result;
+        } catch (error) {
+          const message = (error as Error).message ?? String(error);
+          logger.app("runtime", "warn", "audio transcription failed", { data: message });
+          return { error: message };
+        }
+      },
+    };
+  };
   // Sessions with a manual compaction request in flight. The session
   // operation is released before the sidecar call so Stop stays live; this
   // mark is what keeps a queued prompt from starting against a compacting
@@ -175,6 +221,7 @@ export function registerAgentIpc({
     const prepared = await preparePromptAttachments(
       dataDir, req.sessionId, localProjectPath, req.attachments ?? [],
       context.supportsVision, steerContent,
+      promptAttachmentOptions(req.sessionId),
     );
     const session = await host.call<{ session?: { messages?: UiMessage[] } }>("session.get", {
       id: req.sessionId, messageLimit: 1,
@@ -520,6 +567,7 @@ export function registerAgentIpc({
         // The text the durable message will hold: an image chip the Composer
         // left inline keeps its place in the prompt and in the transcript.
         promptContent,
+        promptAttachmentOptions(req.sessionId),
       );
     } catch (error) {
       await finishTurn(req.sessionId, "error", (error as any)?.errorCode, {
