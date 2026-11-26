@@ -1,10 +1,11 @@
-import { shell, View, WebContentsView, type BrowserWindow, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, Menu, shell, View, WebContentsView, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from "electron";
 import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserState } from "@pi-desktop/shared";
 import { isAllowedHttpUrl, parseAllowedExternalUrl } from "./safe-open-external";
 import { BrowserBackingHost } from "./browser-backing-host";
+import { BROWSER_FIND_SCRIPT, BROWSER_FIND_STYLE } from "./browser-find";
 
 /**
  * Work panel embedded preview browser (D100, ADR 0019).
@@ -142,6 +143,9 @@ export class BrowserPane {
   private pendingTarget: string | null = null;
   private loadError: { url: string; message: string } | null = null;
   private cancelPending: (() => void) | null = null;
+  /** Per-pane page zoom; the panel keeps its own factor. */
+  private zoomFactor = 1;
+  private findStylesInjected = false;
 
   private readonly onOpenUrl?: (url: string) => void;
   private readonly backingHost: BrowserBackingHost;
@@ -483,6 +487,139 @@ export class BrowserPane {
     return this.view?.webContents.getURL().startsWith("file:") === true;
   }
 
+  /**
+   * Page-level affordances the panel chrome does not own: a right-click menu,
+   * zoom (keyboard and menu) and find.
+   *
+   * The page is a guest WebContentsView, so the renderer's own context menu
+   * never sees it — right-clicking a page did nothing at all. Chromium's native
+   * menu is built here from the click parameters, which is the only place that
+   * knows whether the pointer was over a link, an image or an editable field.
+   */
+  private installPageChrome(wc: WebContents): void {
+    this.applyZoom(wc);
+    wc.on("dom-ready", () => this.applyZoom(wc));
+    wc.on("context-menu", (_event, params) => this.showPageMenu(wc, params));
+    wc.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      if (!(input.control || input.meta)) return;
+      if (input.key === "=" || input.key === "+") {
+        event.preventDefault();
+        this.zoomBy(wc, 0.1);
+      } else if (input.key === "-") {
+        event.preventDefault();
+        this.zoomBy(wc, -0.1);
+      } else if (input.key === "0") {
+        event.preventDefault();
+        if (input.shift) void this.fitToWidth(wc);
+        else this.resetZoom(wc);
+      } else if (input.key.toLowerCase() === "f" && !input.shift) {
+        event.preventDefault();
+        void this.openFind(wc);
+      }
+    });
+  }
+
+  private applyZoom(wc: WebContents): void {
+    if (wc.isDestroyed()) return;
+    wc.setZoomFactor(this.zoomFactor);
+  }
+
+  private zoomBy(wc: WebContents, delta: number): void {
+    const next = Math.round((this.zoomFactor + delta) * 100) / 100;
+    this.zoomFactor = Math.min(5, Math.max(0.25, next));
+    this.applyZoom(wc);
+  }
+
+  private resetZoom(wc: WebContents): void {
+    this.zoomFactor = 1;
+    this.applyZoom(wc);
+  }
+
+  /**
+   * Fit to width. The shrunken factor depends on the document's own layout
+   * width, which only the page knows, so it is measured inside the page rather
+   * than extrapolated from the pane's bounds.
+   */
+  private async fitToWidth(wc: WebContents): Promise<void> {
+    try {
+      const ratio = (await wc.executeJavaScript(
+        "(() => { const d = document.documentElement;" +
+          " const w = Math.max(d.scrollWidth, document.body ? document.body.scrollWidth : 0);" +
+          " return w > 0 ? window.innerWidth / w : 1; })()",
+        true,
+      )) as unknown;
+      const value = typeof ratio === "number" && Number.isFinite(ratio) ? ratio : 1;
+      this.zoomFactor = Math.min(5, Math.max(0.25, Math.round(value * 100) / 100));
+      this.applyZoom(wc);
+    } catch {
+      /* the page navigated away or refused evaluation */
+    }
+  }
+
+  private async openFind(wc: WebContents): Promise<void> {
+    try {
+      if (!this.findStylesInjected) {
+        await wc.insertCSS(BROWSER_FIND_STYLE);
+        this.findStylesInjected = true;
+      }
+      await wc.executeJavaScript(BROWSER_FIND_SCRIPT, true);
+    } catch {
+      /* the page navigated away or refused evaluation */
+    }
+  }
+
+  private showPageMenu(wc: WebContents, params: ContextMenuParams): void {
+    const chinese = app.getLocale().toLowerCase().startsWith("zh");
+    const label = (zh: string, en: string) => (chinese ? zh : en);
+    const items: MenuItemConstructorOptions[] = [];
+    if (params.isEditable) {
+      items.push(
+        { role: "cut", label: label("剪切", "Cut") },
+        { role: "copy", label: label("复制", "Copy") },
+        { role: "paste", label: label("粘贴", "Paste") },
+        { role: "selectAll", label: label("全选", "Select All") },
+        { type: "separator" },
+      );
+    } else if (params.selectionText.trim()) {
+      items.push({ role: "copy", label: label("复制", "Copy") }, { type: "separator" });
+    }
+    if (params.linkURL) {
+      items.push(
+        {
+          label: label("复制链接地址", "Copy link address"),
+          click: () => clipboard.writeText(params.linkURL),
+        },
+        {
+          label: label("在默认浏览器打开", "Open in default browser"),
+          click: () => void shell.openExternal(params.linkURL),
+        },
+        { type: "separator" },
+      );
+    }
+    if (params.mediaType === "image" && params.hasImageContents) {
+      items.push(
+        { label: label("复制图片", "Copy image"), click: () => wc.copyImageAt(params.x, params.y) },
+        { type: "separator" },
+      );
+    }
+    items.push(
+      { label: label("后退", "Back"), enabled: wc.navigationHistory.canGoBack(), click: () => this.action("back") },
+      { label: label("前进", "Forward"), enabled: wc.navigationHistory.canGoForward(), click: () => this.action("forward") },
+      { label: label("重新加载", "Reload"), click: () => this.action("reload") },
+      { type: "separator" },
+      { label: label("放大", "Zoom in"), accelerator: "CommandOrControl+=", click: () => this.zoomBy(wc, 0.1) },
+      { label: label("缩小", "Zoom out"), accelerator: "CommandOrControl+-", click: () => this.zoomBy(wc, -0.1) },
+      { label: label("实际大小", "Actual size"), click: () => this.resetZoom(wc) },
+      { label: label("适合宽度", "Fit to width"), click: () => void this.fitToWidth(wc) },
+      { type: "separator" },
+      { label: label("在页面中查找", "Find on page"), accelerator: "CommandOrControl+F", click: () => void this.openFind(wc) },
+      { label: label("检查元素", "Inspect element"), click: () => wc.inspectElement(params.x, params.y) },
+    );
+    const window = this.window ?? BrowserWindow.getFocusedWindow();
+    Menu.buildFromTemplate(items).popup({ window: window ?? undefined });
+  }
+
   private ensureView(): WebContentsView {
     if (this.view && this.getWebContents()) return this.view;
     this.detach();
@@ -502,6 +639,7 @@ export class BrowserPane {
     surface.setBounds(this.bounds);
     this.surface = surface;
     const wc = view.webContents;
+    this.installPageChrome(wc);
     wc.setWindowOpenHandler(({ url }) => {
       const allowed = parseAllowedExternalUrl(url);
       if (allowed) {
