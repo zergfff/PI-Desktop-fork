@@ -2502,6 +2502,7 @@ sklm: {
       tableTruncatedColumns: "僅顯示前 {{count}} 欄",
       tableTruncatedBoth: "僅顯示前 {{rows}} 列、前 {{columns}} 欄",
       officeHint: "Office 文件需用預設程式開啟",
+      pdfHint: "PDF 請在檔案管理員中預覽",
       actions: "檔案操作",
       copySelection: "複製選取內容",
       openExternal: "用預設程式開啟",

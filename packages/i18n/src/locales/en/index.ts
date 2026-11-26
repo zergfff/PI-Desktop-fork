@@ -2527,6 +2527,7 @@ sklm: {
       tableTruncatedColumns: "Showing the first {{count}} columns",
       tableTruncatedBoth: "Showing the first {{rows}} rows and {{columns}} columns",
       officeHint: "Office documents open in their own application",
+      pdfHint: "PDFs preview in the file manager",
       actions: "File actions",
       copySelection: "Copy selection",
       openExternal: "Open with default application",

@@ -2473,6 +2473,7 @@ export const ptBR = {
       tableTruncatedColumns: "Mostrando as primeiras {{count}} colunas",
       tableTruncatedBoth: "Mostrando as primeiras {{rows}} linhas e {{columns}} colunas",
       officeHint: "Documentos do Office abrem no próprio aplicativo",
+      pdfHint: "PDFs são visualizados no gerenciador de arquivos",
       actions: "Ações do arquivo",
       copySelection: "Copiar seleção",
       openExternal: "Abrir com o aplicativo padrão",

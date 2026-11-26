@@ -2502,6 +2502,7 @@ sklm: {
       tableTruncatedColumns: "仅显示前 {{count}} 列",
       tableTruncatedBoth: "仅显示前 {{rows}} 行、前 {{columns}} 列",
       officeHint: "Office 文档需用默认程序打开",
+      pdfHint: "PDF 请在文件管理器中预览",
       actions: "文件操作",
       copySelection: "复制选中内容",
       openExternal: "用默认程序打开",

@@ -13,6 +13,11 @@ import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import { Markdown } from "../Markdown";
 import { ContextMenu, useContextMenu } from "../ContextMenu";
+import {
+  FILE_MANAGER_PLUGIN_TAB,
+  fileManagerPluginTab,
+  hasPluginView,
+} from "../../lib/work-panel-tabs";
 import { CsvPreview } from "./CsvPreview";
 import { usePreviewFind } from "./usePreviewFind";
 import { fileDirOf } from "../../lib/chat-links";
@@ -101,6 +106,11 @@ function isMarkdownPath(path: string): boolean {
 /** CSV/TSV get a table instead of a wall of commas. */
 function isDelimitedPath(path: string): boolean {
   return /\.(?:csv|tsv)$/i.test(path);
+}
+
+/** PDFs are rendered by the bundled file-manager view, not by this pane. */
+function isPdfPath(path: string): boolean {
+  return /\.pdf$/i.test(path);
 }
 
 /** Office formats are ZIP containers of XML: recognised, not parsed here. */
@@ -271,8 +281,28 @@ export function FilesTab() {
     [dirs, loadDir],
   );
 
+  /**
+   * PDF hand-off.
+   *
+   * This pane cannot render a PDF: it has no parser, so the file used to land
+   * in the generic text path and print its own bytes. The bundled file-manager
+   * view ships PDF.js (continuous scroll, page layout, zoom, text layer,
+   * thumbnails, find), so the PDF is opened there instead — one renderer for
+   * PDFs in the whole app, and its upgrades come with the plugin.
+   *
+   * Local sessions only: a remote workspace has no plugin view, and the
+   * fallback below still explains itself.
+   */
+  const handOffPdf = useCallback((rel: string): boolean => {
+    if (!isPdfPath(rel) || remote) return false;
+    if (!hasPluginView(useAppStore.getState().pluginViews, FILE_MANAGER_PLUGIN_TAB)) return false;
+    useAppStore.getState().openWorkPanelTab(fileManagerPluginTab(rel));
+    return true;
+  }, [remote]);
+
   const openFile = useCallback(
     async (rel: string, mimeType?: string, position?: { line?: number; column?: number }) => {
+      if (handOffPdf(rel)) return;
       const request = ++fileGeneration.current;
       setSelected(rel);
       setSelectedMimeType(mimeType);
@@ -288,7 +318,7 @@ export function FilesTab() {
         setFileError(true);
       }
     },
-    [root, sessionId],
+    [root, sessionId, handOffPdf],
   );
 
   useEffect(() => {
@@ -689,14 +719,17 @@ export function FilesTab() {
             <WorkTabEmpty
               icon={IconFileText}
               title={
-                isOfficePath(selected)
-                  ? t("panel.files.officeHint")
-                  : file.kind === "tooLarge"
-                    ? t("panel.files.tooLarge")
-                    : t("panel.files.binary")
-              }
-            >
-              {!remote && (isMp4(selected, selectedMimeType) || isOfficePath(selected)) && (
+                isPdfPath(selected)
+                  ? t("panel.files.pdfHint")
+                  : isOfficePath(selected)
+                    ? t("panel.files.officeHint")
+                    : file.kind === "tooLarge"
+                      ? t("panel.files.tooLarge")
+                      : t("panel.files.binary")
+                  }
+                  >
+                  {!remote &&
+                  (isMp4(selected, selectedMimeType) || isOfficePath(selected) || isPdfPath(selected)) && (
                 <Button type="button" onClick={() => void openMp4()}>
                   {t("chat.openFile")}
                 </Button>

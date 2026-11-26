@@ -2507,6 +2507,7 @@ sklm: {
       "tableTruncatedColumns": "Mostrando las primeras {{count}} columnas",
       "tableTruncatedBoth": "Mostrando las primeras {{rows}} filas y {{columns}} columnas",
       "officeHint": "Los documentos de Office se abren en su propia aplicación",
+      "pdfHint": "Los PDF se previsualizan en el administrador de archivos",
       "actions": "Acciones del archivo",
       "copySelection": "Copiar selección",
       "openExternal": "Abrir con la aplicación predeterminada",

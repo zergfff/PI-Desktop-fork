@@ -2517,6 +2517,7 @@ sklm: {
       tableTruncatedColumns: "İlk {{count}} sütun gösteriliyor",
       tableTruncatedBoth: "İlk {{rows}} satır ve {{columns}} sütun gösteriliyor",
       officeHint: "Office belgeleri kendi uygulamasında açılır",
+      pdfHint: "PDF'ler dosya yöneticisinde önizlenir",
       actions: "Dosya işlemleri",
       copySelection: "Seçimi kopyala",
       openExternal: "Varsayılan uygulamayla aç",

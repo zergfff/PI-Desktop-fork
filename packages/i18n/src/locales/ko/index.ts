@@ -2523,6 +2523,7 @@ sklm: {
       tableTruncatedColumns: "처음 {{count}}개 열 표시",
       tableTruncatedBoth: "처음 {{rows}}개 행과 {{columns}}개 열 표시",
       officeHint: "Office 문서는 해당 앱에서 열립니다",
+      pdfHint: "PDF는 파일 관리자에서 미리 봅니다",
       actions: "파일 작업",
       copySelection: "선택 항목 복사",
       openExternal: "기본 앱으로 열기",
