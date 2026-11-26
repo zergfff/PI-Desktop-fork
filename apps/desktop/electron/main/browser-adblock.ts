@@ -76,6 +76,11 @@ const DEFAULT_RULES = [
   "||advertising.apple.com^",
   "/ad-banner",
   "/ads/banner",
+  "##ins.adsbygoogle",
+  "##.adsbygoogle",
+  '##div[id^="div-gpt-ad"]',
+  '##iframe[src*="doubleclick.net"]',
+  '##iframe[src*="googlesyndication.com"]',
 ];
 
 export type AdblockRuleSet = {
@@ -83,6 +88,8 @@ export type AdblockRuleSet = {
   blockPatterns: RegExp[];
   allowHosts: Set<string>;
   allowPatterns: RegExp[];
+  /** `##selector` rules: hidden in the page, not blocked on the wire. */
+  cosmeticSelectors: string[];
 };
 
 export type AdblockStats = {
@@ -122,11 +129,22 @@ export function parseAdblockRules(text: string): AdblockRuleSet {
     blockPatterns: [],
     allowHosts: new Set(),
     allowPatterns: [],
+    cosmeticSelectors: [],
   };
   for (const rawLine of text.split(/\r?\n/)) {
     let line = rawLine.trim();
     if (!line || line.startsWith("!") || line.startsWith("[")) continue;
-    if (line.includes("##") || line.includes("#@#") || line.includes("#?#")) continue;
+    // Cosmetic rules hide an element instead of cancelling a request. A
+    // domain-prefixed rule (`example.com##.ad`) is applied everywhere rather
+    // than risk hiding the wrong thing: the panel has one site at a time, and a
+    // silent no-op would be worse than a slightly eager hide.
+    const cosmetic = line.indexOf("##");
+    if (cosmetic >= 0) {
+      if (line.includes("#@#") || line.includes("#?#")) continue;
+      const selector = line.slice(cosmetic + 2).trim();
+      if (selector && !/[{}\\]/.test(selector)) rules.cosmeticSelectors.push(selector);
+      continue;
+    }
     let allow = false;
     if (line.startsWith("@@")) {
       allow = true;
@@ -166,6 +184,18 @@ export function parseAdblockRules(text: string): AdblockRuleSet {
 export function loadAdblockRules(dataDir: string): AdblockRuleSet {
   const file = ensureAdblockList(dataDir);
   return parseAdblockRules(readFileSync(file, "utf8"));
+}
+
+/**
+ * CSS that hides cosmetic matches.
+ *
+ * `display: none !important` is the only property that reliably wins against a
+ * page's own rules; the selectors come from the user's list and are validated in
+ * the parser, so nothing here can escape the declaration block.
+ */
+export function adblockCosmeticCss(rules: AdblockRuleSet): string {
+  if (!rules.cosmeticSelectors.length) return "";
+  return `${rules.cosmeticSelectors.join(",\n")} { display: none !important; }`;
 }
 
 /** True when the URL should be cancelled. Whitelists win. */

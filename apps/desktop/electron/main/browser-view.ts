@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, Menu, shell, View, WebContentsView, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from "electron";
-import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
-import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, statSync, watch, type FSWatcher } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserState } from "@pi-desktop/shared";
 import { isAllowedHttpUrl, parseAllowedExternalUrl } from "./safe-open-external";
@@ -12,6 +13,7 @@ import {
   openBrowserExtensionsFolder,
 } from "./browser-extensions";
 import {
+  adblockCosmeticCss,
   adblockListPath,
   createAdblockRuntime,
   ensureAdblockList,
@@ -57,6 +59,51 @@ function adblockDir(): string {
 function reloadAdblockRules(): AdblockRuleSet {
   adblockRules = loadAdblockRules(adblockDir());
   return adblockRules;
+}
+
+/** Where the pane drops downloaded files; the OS default, not a private folder. */
+function downloadsDir(): string {
+  try {
+    return app.getPath("downloads");
+  } catch {
+    return join(homedir(), "Downloads");
+  }
+}
+
+const downloadSessions = new WeakSet<object>();
+
+/**
+ * Save downloads to the OS Downloads folder instead of prompting per file.
+ *
+ * Electron's default is a save dialog per download, which fights the panel's
+ * model of "this is a browser, downloading is normal". Collisions get a numeric
+ * suffix so nothing is silently overwritten.
+ */
+function ensureDownloads(session: Electron.Session): void {
+  if (downloadSessions.has(session)) return;
+  downloadSessions.add(session);
+  session.on("will-download", (_event, item) => {
+    const dir = downloadsDir();
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      return;
+    }
+    const name = item.getFilename() || "download";
+    const dot = name.lastIndexOf(".");
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const extension = dot > 0 ? name.slice(dot) : "";
+    let target = join(dir, name);
+    for (let index = 1; existsSync(target) && index < 1000; index += 1) {
+      target = join(dir, `${stem} (${index})${extension}`);
+    }
+    item.setSavePath(target);
+    item.once("done", (_doneEvent, state) => {
+      if (state !== "completed") {
+        console.warn(`[browser] download ${state}: ${name}`);
+      }
+    });
+  });
 }
 
 function ensureAdblock(session: Electron.Session): void {
@@ -195,6 +242,8 @@ export class BrowserPane {
   /** Per-pane page zoom; the panel keeps its own factor. */
   private zoomFactor = 1;
   private findStylesInjected = false;
+  /** Key of the inserted cosmetic CSS, so a toggle can remove it again. */
+  private cosmeticKey: string | null = null;
 
   private readonly onOpenUrl?: (url: string) => void;
   private readonly backingHost: BrowserBackingHost;
@@ -547,7 +596,10 @@ export class BrowserPane {
    */
   private installPageChrome(wc: WebContents): void {
     this.applyZoom(wc);
-    wc.on("dom-ready", () => this.applyZoom(wc));
+    wc.on("dom-ready", () => {
+      this.applyZoom(wc);
+      this.applyCosmeticFilter(wc);
+    });
     wc.on("context-menu", (_event, params) => this.showPageMenu(wc, params));
     // Ctrl/Cmd + wheel, exactly like a browser: Chromium reports the gesture,
     // the pane owns the factor it has been keeping all along.
@@ -575,6 +627,30 @@ export class BrowserPane {
         void this.openFind(wc);
       }
     });
+  }
+
+  /**
+   * Hide what the list marks cosmetic.
+   *
+   * Network blocking leaves the ad's empty box behind, which still reads as a
+   * broken page; the selector list from `adblock.txt` is inserted as page CSS on
+   * every document, and dropped when the switch is off.
+   */
+  private applyCosmeticFilter(wc: WebContents): void {
+    if (wc.isDestroyed()) return;
+    if (this.cosmeticKey) {
+      void wc.removeInsertedCSS(this.cosmeticKey).catch(() => undefined);
+      this.cosmeticKey = null;
+    }
+    if (!readAdblockEnabled(adblockDir())) return;
+    const css = adblockCosmeticCss(adblockRules ?? reloadAdblockRules());
+    if (!css) return;
+    void wc
+      .insertCSS(css)
+      .then((key) => {
+        this.cosmeticKey = key;
+      })
+      .catch(() => undefined);
   }
 
   private applyZoom(wc: WebContents): void {
@@ -700,6 +776,35 @@ export class BrowserPane {
           if (!wc.isDestroyed()) wc.reload();
         },
       },
+      {
+        label: label("本站不拦截广告", "Do not block ads on this site"),
+        enabled: isAllowedHttpUrl(wc.getURL()),
+        click: () => {
+          const host = (() => {
+            try {
+              return new URL(wc.getURL()).hostname;
+            } catch {
+              return "";
+            }
+          })();
+          if (!host) return;
+          const file = ensureAdblockList(adblockDir());
+          appendFileSync(file, `@@||${host}^\n`, "utf8");
+          reloadAdblockRules();
+          if (!wc.isDestroyed()) wc.reload();
+        },
+      },
+      { type: "separator" },
+      {
+        label: label("开发者工具", "Developer tools"),
+        click: () => {
+          if (!wc.isDestroyed()) wc.openDevTools({ mode: "detach" });
+        },
+      },
+      {
+        label: label("打开下载目录", "Open downloads folder"),
+        click: () => void shell.openPath(downloadsDir()),
+      },
       { type: "separator" },
       {
         label: label("加载扩展（已解压的文件夹）…", "Load extension (unpacked folder)…"),
@@ -779,6 +884,7 @@ export class BrowserPane {
     this.surface = surface;
     const wc = view.webContents;
     ensureAdblock(wc.session);
+    ensureDownloads(wc.session);
     this.installPageChrome(wc);
     wc.setWindowOpenHandler(({ url }) => {
       const allowed = parseAllowedExternalUrl(url);
