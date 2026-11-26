@@ -18,6 +18,7 @@ import { LifecycleConfirmationDialog } from "../../components/LifecycleConfirmat
 import { ProjectCreateDialog } from "../../components/ProjectCreateDialog";
 import { SearchDialog } from "../../components/SearchDialog";
 import { Sidebar } from "../../components/Sidebar";
+import { AppOverlayHost } from "../startup/AppOverlayHost";
 import { StartupRecovery } from "../../components/StartupRecovery";
 import { ToastHost } from "../../components/Toast";
 import { UpdateBanner } from "../../components/UpdateBanner";
@@ -27,8 +28,6 @@ import { useCopyTex } from "../../hooks/use-copy-tex";
 import { api } from "../../lib/api";
 import { installMaximizedWindowChrome } from "../../lib/maximized-window-chrome";
 import { workPanelLayout } from "../../lib/work-panel-resize";
-import { LiveVoiceStatusHost } from "../voice/live/LiveVoiceStatusHost";
-import { AppOverlayHost } from "../startup/AppOverlayHost";
 import { CollapsedTitlebarActions, RoutePending } from "./chrome";
 import { useAppShellRuntime } from "./useAppShellRuntime";
 
@@ -339,10 +338,10 @@ export function AppShell() {
             </span>
           </TooltipButton>
         </div>
-        <AppOverlayHost active={!showSplash} />
         <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+        {/* Carries the Settings dialog: see AppOverlayHost. */}
+        <AppOverlayHost active={!showSplash} />
         <ToastHost anchorElement={toastAnchor} />
-        <LiveVoiceStatusHost />
         <PluginRendererHost />
         <ExtensionPromptHost />
       </>

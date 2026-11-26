@@ -1,6 +1,6 @@
 {
   "name": "@pi-desktop/desktop",
-  "version": "0.24.0-beta.5",
+  "version": "0.24.0-fork.2",
   "desktopName": "pi-desktop.desktop",
   "private": true,
   "description": "PI-Desktop Electron application",
@@ -90,8 +90,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "vastsa",
-        "repo": "PI-Desktop"
+        "owner": "zergfff",
+        "repo": "PI-Desktop-fork"
       }
     ],
     "extraMetadata": {

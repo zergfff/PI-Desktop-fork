@@ -71,9 +71,10 @@ function defaultRead(channel) {
   return {};
 }
 
-test("packaged non-developer Settings exposes experimental Remote Hosts", () => {
-  const nav = visibleSettingsNav(false, false).find((item) => item.id === "remoteHosts");
-  assert.ok(nav); assert.equal(nav.experimentalBadgeKey, "settings.remoteHosts.experimental");
+test("packaged non-developer Settings omits Remote Hosts in this fork", () => {
+  assert.equal(visibleSettingsNav(false, false).some((item) => item.id === "remoteHosts"), false);
+  const dev = visibleSettingsNav(false, true).find((item) => item.id === "remoteHosts");
+  assert.ok(dev); assert.equal(dev.experimentalBadgeKey, "settings.remoteHosts.experimental");
 });
 
 test("legacy history opens through the regular store without project or model transfer", async () => {

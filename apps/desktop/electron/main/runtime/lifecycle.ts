@@ -65,7 +65,12 @@ export function createRuntimeLifecycle({
   superviseRestart: (kind: RestartKind) => Promise<void>;
   bootHostStatus: (bootError: unknown) => HostStatusEvent;
   runtimeArch: () => ReturnType<typeof detectRuntimeArch>;
-  bootBackends: () => Promise<void>;
+  /**
+   * Boots host-core and everything behind it. `afterHost` runs the moment the
+   * host answers, before the agent sidecar and the restored plugins, so the
+   * first window can load while the rest of boot continues.
+   */
+  bootBackends: (options?: { afterHost?: (stored: unknown) => Promise<void> }) => Promise<void>;
 } {
   let runtimeArchCache: ReturnType<typeof detectRuntimeArch> | null = null;
 
@@ -214,7 +219,9 @@ export function createRuntimeLifecycle({
     return runtimeArchCache;
   };
 
-  const bootBackends = async (): Promise<void> => {
+  const bootBackends = async (
+    options?: { afterHost?: (stored: unknown) => Promise<void> },
+  ): Promise<void> => {
     mkdirSync(join(dataDir, "logs"), { recursive: true });
     logger.app("lifecycle", "info", "app boot " + APP_NAME + " " + APP_VERSION, {
       data: { protocolVersion: PROTOCOL_VERSION },
@@ -232,12 +239,17 @@ export function createRuntimeLifecycle({
     // the process answers. The startup sequence re-applies it with the stored
     // settings; this keeps a host that boots without that write honest.
     await syncPluginDisplayLocale(runtimeState.host, getDisplayLocale());
+    let stored: unknown = null;
     try {
-      const stored = await runtimeState.host!.call("settings.get");
+      stored = await runtimeState.host!.call("settings.get");
       await applyNetworkProxyFromAppSettings(stored);
     } catch {
       await applyNetworkProxyFromAppSettings({ mode: "system" });
     }
+    // The shell needs a host that answers, not a sidecar that is ready: open it
+    // here and let the rest of boot (sidecar, plugins, MCP, plan drain) run
+    // behind the window. The renderer's splash still waits for `hostStatus`.
+    if (options?.afterHost) await options.afterHost(stored);
     await startSidecar();
 
     // Keep plugin host services wired to live workspace / app metadata.

@@ -1,4 +1,4 @@
 provider: github
-owner: vastsa
-repo: PI-Desktop
+owner: zergfff
+repo: PI-Desktop-fork
 updaterCacheDirName: '@pi-desktopdesktop-updater'

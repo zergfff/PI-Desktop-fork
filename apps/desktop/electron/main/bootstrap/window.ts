@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getModuleDirectory } from "../module-path";
+import { bootMark } from "../boot-trace";
 import {
   APP_NAME,
   builtinWindowBackground,
@@ -1211,6 +1212,7 @@ export async function createWindow({
   });
 
   window.once("ready-to-show", () => {
+    bootMark("ready-to-show");
     if (!isLiveWindow()) return;
     // Capture runs need the deterministic Codex footprint; normal launches
     // must respect restored user bounds and only fix real shelf states.

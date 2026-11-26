@@ -2510,6 +2510,7 @@ sklm: {
       error: "이 위치를 읽을 수 없습니다",
       back: "파일로 돌아가기",
       reveal: "Finder에서 보기",
+      reload: "디스크에서 다시 읽기",
       binary: "바이너리 파일 — 미리 볼 수 없음",
       tooLarge: "파일이 너무 커서 미리 볼 수 없음",
       openFailed: "기본 앱으로 파일을 열 수 없습니다.",

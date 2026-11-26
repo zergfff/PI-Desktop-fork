@@ -18,7 +18,11 @@ if (!["linux", "mac", "win"].includes(target)) {
   throw new Error(`Unsupported desktop release target: ${target}`);
 }
 
-const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+// Resolve pnpm through the shell's PATHEXT rather than a literal `pnpm.cmd`:
+// a standalone pnpm install ships `pnpm.exe` with no `.cmd` shim, so the
+// extension-qualified name fails with "not recognized as an internal or
+// external command" on machines that never installed pnpm through npm.
+const pnpmCommand = "pnpm";
 
 function runBuilder(args) {
   return new Promise((resolve, reject) => {

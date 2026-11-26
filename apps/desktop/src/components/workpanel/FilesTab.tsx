@@ -29,10 +29,28 @@ import {
   IconExternal,
   IconFileText,
   IconFolder,
+  IconRefresh,
 } from "../icons";
 import { WorkTabEmpty } from "./WorkTabEmpty";
 
 const VIEWER_LINE_CAP = 5000;
+
+/**
+ * The host's reader is one-shot: `openFile()` reads the file once and the
+ * preview renders that snapshot until the tab closes, so a file rewritten
+ * outside the panel — another editor, a `git checkout`, the agent's own
+ * tools — left the reader looking at text that no longer exists on disk, with
+ * no way to pull the new version in.
+ *
+ * Poll while the preview is on screen and reload in place. Text only: images
+ * and binaries never change content under the same name in practice, and
+ * re-reading their bytes on a timer costs more than it saves — the header
+ * button covers those. Larger text files get a longer interval because every
+ * probe re-reads the whole (capped) body over IPC on the main thread.
+ */
+const REFRESH_INTERVAL_MS = 2_500;
+const REFRESH_LARGE_INTERVAL_MS = 15_000;
+const REFRESH_LARGE_BYTES = 1024 * 1024;
 
 const EXT_LANG: Record<string, string> = {
   ts: "typescript",
@@ -172,6 +190,8 @@ export function FilesTab() {
   const [fileError, setFileError] = useState(false);
   const viewerBodyRef = useRef<HTMLDivElement>(null);
   const fileGeneration = useRef(0);
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selected;
 
   // Workspace switches reset all browsing state. Guarded so it only fires on
   // an actual root change: an unconditional [root] effect also runs on the
@@ -255,6 +275,63 @@ export function FilesTab() {
     });
     return () => cancelAnimationFrame(frame);
   }, [file, selectedLine]);
+
+  // Swap in a freshly read file without throwing the reader back to the top.
+  const applyFile = useCallback((next: FsReadResult) => {
+    const body = viewerBodyRef.current;
+    const scrollTop = body?.scrollTop ?? 0;
+    setFile(next);
+    setFileError(false);
+    if (!body) return;
+    requestAnimationFrame(() => {
+      if (viewerBodyRef.current === body) body.scrollTop = scrollTop;
+    });
+  }, []);
+
+  // Manual reload: the header button, and the only path for images/binary
+  // previews, which the timer below deliberately skips.
+  const reloadFile = useCallback(async () => {
+    const path = selected;
+    if (!path) return;
+    try {
+      const next = await api.fsRead(path, selectedMimeType, sessionId);
+      if (selectedRef.current !== path) return;
+      if (scopeRef.current.root !== root || scopeRef.current.sessionId !== sessionId) return;
+      applyFile(next);
+    } catch {
+      showToast(t("panel.files.error"), { variant: "error" });
+    }
+  }, [selected, selectedMimeType, sessionId, root, applyFile, showToast, t]);
+
+  // Auto-reload while the preview is on screen. Polling beats a watcher here
+  // because the renderer has no filesystem access and adding a channel for it
+  // would mean touching the IPC contract, the preload bridge and the remote
+  // backend for a panel that is only visible part of the time.
+  useEffect(() => {
+    if (!selected || !file || file.kind !== "text") return;
+    const path = selected;
+    const interval =
+      file.size > REFRESH_LARGE_BYTES ? REFRESH_LARGE_INTERVAL_MS : REFRESH_INTERVAL_MS;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void (async () => {
+        try {
+          const next = await api.fsRead(path, selectedMimeType, sessionId);
+          if (stopped || selectedRef.current !== path) return;
+          if (scopeRef.current.root !== root || scopeRef.current.sessionId !== sessionId) return;
+          if (next.kind !== "text" || next.content === file.content) return;
+          applyFile(next);
+        } catch {
+          // A read that lands mid-write keeps the last good preview on screen.
+        }
+      })();
+    }, interval);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [selected, selectedMimeType, sessionId, root, file, applyFile]);
 
   const openMp4 = useCallback(async () => {
     if (!selected || remote) return;
@@ -379,6 +456,15 @@ export function FilesTab() {
             {selected}
           </span>
           {file && <span className="file-viewer-size">{formatSize(file.size)}</span>}
+          <TooltipButton
+            type="button"
+            className="icon-btn icon-btn-square"
+            tooltip={t("panel.files.reload")}
+            ariaLabel={t("panel.files.reload")}
+            onClick={() => void reloadFile()}
+          >
+            <IconRefresh size={14} />
+          </TooltipButton>
           {!remote ? <TooltipButton
             type="button"
             className="icon-btn icon-btn-square"

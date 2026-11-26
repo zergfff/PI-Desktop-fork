@@ -33,10 +33,11 @@ const syncError = await read(
   "../src/components/settings/ConfigSyncError.tsx",
 );
 
-test("cloud sync is Experimental and available in packaged Settings", () => {
+test("cloud sync is Experimental and packaged-out in this fork", () => {
   assert.match(settingsPage, /tab === "sync" && !tabHidden && <ConfigSyncPage \/>/);
   assert.match(settingsIndex, /id: "sync"/);
-  assert.doesNotMatch(settingsIndex, /id: "sync"[\s\S]{0,400}developmentOnly: true/);
+  // Fork build: the destination is retained for development only.
+  assert.match(settingsIndex, /id: "sync"[\s\S]{0,400}developmentOnly: true/);
   assert.match(settingsIndex, /experimentalBadgeKey: "settings\.configSync\.experimental"/);
   assert.match(settingsIndex, /settings\.configSync\.connectionTitle/);
   assert.match(settingsIndex, /"settings\.configSync\.experimental"/);

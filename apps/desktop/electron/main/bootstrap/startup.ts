@@ -1,4 +1,5 @@
 import { app, BrowserWindow, crashReporter, Menu, safeStorage } from "electron";
+import { bootMark } from "../boot-trace";
 import { createScheduledRunner } from "../runtime/scheduled-runner";
 import { onConfirmedQuit } from "./confirmed-quit";
 import {
@@ -103,7 +104,7 @@ export type StartupDependencies = {
   dispatchNativeMenuAction: (action: NativeMenuAction) => void;
   prewarmPluginLauncher: () => void;
   registerIpc: () => IpcInvoker;
-  bootBackends: () => Promise<void>;
+  bootBackends: (options?: { afterHost?: (stored: unknown) => Promise<void> }) => Promise<void>;
   planUiProbe: { install: () => void };
   applyApplicationMenuSettings: (settings?: {
     language?: unknown;
@@ -234,11 +235,8 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
       dispatch: dispatchApplicationMenuCommand,
       dispatchNative: dispatchNativeMenuAction,
     });
-    // Start the retained launcher as soon as Electron is ready. It can load in
-    // parallel with host/plugin boot, so the first post-boot Option+Space does
-    // not race the renderer allocation just because backend startup was slow.
-    prewarmPluginLauncher();
     const invokeIpc = registerIpc();
+    bootMark("ipc registered");
     // The backend router is the single seam that forwards a renderer IPC call
     // to a paired remote host; with no remote session registered it returns
     // ROUTE_LOCAL and the local handler runs unchanged. Assigned before the
@@ -270,15 +268,22 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
         logger.app("runtime", level, message, { data: formatRemoteLogData(data) }),
     });
     setActiveRemoteHostsBoot(remoteHostsBoot);
-    // Boot in the background: a slow or unreachable host must not delay the
-    // first window. Failures for individual hosts are logged inside `open()`.
-    void remoteHostsBoot.open().then((opened) => {
-      if (opened > 0) {
-        logger.app("runtime", "info", "remote hosts connected", { data: String(opened) });
-      }
-    }).catch((error: unknown) => {
-      logger.app("runtime", "warn", "remote host boot failed", { data: String(error) });
-    });
+    // Remote hosts are not shipped in this build: the Settings page and the
+    // "remote" project source were removed, so no host can be paired from the
+    // UI. Opening the registry would only dial SSH for pairings left over from
+    // an earlier version — work no screen can reach. Keep the wiring (session
+    // routing still asks the router, which answers ROUTE_LOCAL) and skip the
+    // contact.
+    const REMOTE_HOSTS_ENABLED = false;
+    if (REMOTE_HOSTS_ENABLED) {
+      void remoteHostsBoot.open().then((opened) => {
+        if (opened > 0) {
+          logger.app("runtime", "info", "remote hosts connected", { data: String(opened) });
+        }
+      }).catch((error: unknown) => {
+        logger.app("runtime", "warn", "remote host boot failed", { data: String(error) });
+      });
+    }
     state.agentHostBridge = createAgentHostBridge({
       invoke: invokeIpc,
       channels: IPC.invoke,
@@ -306,9 +311,81 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
     // is refreshed on demand from Settings (see models-dev-catalog / the
     // 13-model-catalog-and-selection spec).
     void modelsDevCatalog.ensureLoaded();
+    // Preferences for the boot animation, when settings were readable. An
+    // unreadable backend leaves this null and discovery falls back to the
+    // defaults, so a launch with no host still plays what the user dropped in.
+    let storedStartupAnimationSettings: { startupAnimation?: unknown } | null = null;
+
+    /**
+     * Open the shell as soon as host-core answers.
+     *
+     * Everything after that point in `bootBackends` — the agent sidecar, the
+     * restored plugins, MCP registration, the plan drain — is either rendered
+     * later or not at all, and the renderer already re-reads plugin surfaces
+     * when the `pluginChanged` event arrives. Waiting for all of it before the
+     * first window put the whole tail of boot on the user's "it started"
+     * clock; here the shell loads its page while that work continues behind
+     * it. The splash still waits for `hostStatus`, so nothing is presented as
+     * ready before it is.
+     */
+    let shellOpened = false;
+    const openShell = async (stored: unknown): Promise<void> => {
+      const settings = stored as {
+        language?: unknown;
+        theme?: unknown;
+        keybindings?: unknown;
+        developerMode?: unknown;
+        fontScale?: unknown;
+        macosWindowTranslucency?: unknown;
+        startupAnimation?: unknown;
+        preventScreenSleep?: unknown;
+        keepAwakeWhileRunning?: unknown;
+      } | null;
+      if (settings) {
+        applyApplicationMenuSettings(settings);
+        applyDeveloperMode(settings);
+        applyMacosWindowTranslucency(settings);
+        applyPreventScreenSleep(settings);
+        applyKeepAwakeWhileRunning(settings);
+        storedStartupAnimationSettings = settings;
+      } else {
+        // Keep the OS-locale menu until settings can be read again, while
+        // retaining the historical default launcher fallback for this failure.
+        applyPluginLauncherShortcut();
+        applyToggleWindowShortcut();
+      }
+      // Resolve the boot animation before the window exists: the descriptor is
+      // a renderer creation argument, so it has to be known by
+      // `new BrowserWindow`. The capture rig compares deterministic frames, so
+      // a user's animation in front of them would break every scene; it is
+      // skipped outright. The E2E harnesses need no guard — each runs against
+      // a throwaway `PI_DESKTOP_DATA_DIR`, which has no `startup/` directory.
+      if (process.env.PI_DESKTOP_CAPTURE !== "1") {
+        state.startupAnimation = await resolveStartupAnimation({
+          dataDir,
+          settings: storedStartupAnimationSettings,
+        });
+        if (state.startupAnimation) {
+          logger.app("lifecycle", "info", "startup animation resolved", {
+            data: JSON.stringify({
+              fileName: state.startupAnimation.descriptor.fileName,
+              byteLength: state.startupAnimation.descriptor.byteLength,
+            }),
+          });
+        }
+      }
+      bootMark("settings and boot animation resolved");
+      await ensureWindow();
+      shellOpened = true;
+      bootMark("window opened");
+      // The retained launcher only has to be warm before the first
+      // Option+Space, not before the first window.
+      prewarmPluginLauncher();
+    };
+
     let bootError: unknown = null;
     try {
-      await bootBackends();
+      await bootBackends({ afterHost: openShell });
     } catch (error) {
       bootError = error;
       logger.app("runtime", "error", "backend boot failed", {
@@ -316,88 +393,11 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
         data: String(error),
       });
     }
-    if (!bootError) planUiProbe.install();
-    const scheduledRunner = createScheduledRunner({
-      getHost,
-      execute: (id) => invokeIpc(IPC.invoke.scheduledExecute, [id, true]),
-      report: (error) => logger.app("runtime", "warn", "scheduled task dispatch failed", { data: String(error) }),
-    });
-    scheduledRunner.start();
-    logger.app("runtime", "info", "scheduled runner started");
-    // Stop only on a committed quit: a cancelled quit confirmation keeps the
-    // app running, and a runner stopped from `before-quit` would stay silent
-    // until restart (issue #2048).
-    onConfirmedQuit(() => {
-      scheduledRunner.stop();
-      logger.app("runtime", "info", "scheduled runner stopped", { data: "app-quit" });
-    });
-    if (!bootError && state.agentHostBridge) {
-      // Restore the persisted turn queue now that host-core answers. Restored
-      // entries stay held until a controller attaches (D375).
-      state.agentHostBridge.agentHost.start().catch((error) => {
-        logger.app("runtime", "warn", "agent host queue restore failed", {
-          data: String(error),
-        });
-      });
+    bootMark(bootError ? "backends failed" : "backends booted");
+    if (!shellOpened) {
+      // A backend that never answered still owes the user a window.
+      await openShell(null);
     }
-    const host = getHost();
-    // Preferences for the boot animation, when settings were readable. An
-    // unreadable backend leaves this null and discovery falls back to the
-    // defaults, so a launch with no host still plays what the user dropped in.
-    let storedStartupAnimationSettings: { startupAnimation?: unknown } | null = null;
-    if (host) {
-      try {
-        const stored = (await host.call("settings.get")) as {
-          language?: unknown;
-          theme?: unknown;
-          keybindings?: unknown;
-          developerMode?: unknown;
-          fontScale?: unknown;
-          macosWindowTranslucency?: unknown;
-          startupAnimation?: unknown;
-          preventScreenSleep?: unknown;
-          keepAwakeWhileRunning?: unknown;
-        } | null;
-        applyApplicationMenuSettings(stored);
-        applyDeveloperMode(stored);
-        applyMacosWindowTranslucency(stored);
-        applyPreventScreenSleep(stored);
-        applyKeepAwakeWhileRunning(stored);
-        storedStartupAnimationSettings = stored;
-        await applyNetworkProxyFromAppSettings(stored);
-      } catch {
-        // Keep the OS-locale menu until settings can be read again, while
-        // retaining the historical default launcher fallback for this failure.
-        applyPluginLauncherShortcut();
-        applyPluginLauncherShortcut();
-        applyToggleWindowShortcut();
-      }
-    } else {
-      // If the backend never started, retain the default focused/global path.
-      applyPluginLauncherShortcut();
-      applyToggleWindowShortcut();
-    }
-    // Resolve the boot animation before the window exists: the descriptor is a
-    // renderer creation argument, so it has to be known by `new BrowserWindow`.
-    // The capture rig compares deterministic frames, so a user's animation in
-    // front of them would break every scene; it is skipped outright. The E2E
-    // harnesses need no guard — each runs against a throwaway
-    // `PI_DESKTOP_DATA_DIR`, which has no `startup/` directory to find.
-    if (process.env.PI_DESKTOP_CAPTURE !== "1") {
-      state.startupAnimation = await resolveStartupAnimation({
-        dataDir,
-        settings: storedStartupAnimationSettings,
-      });
-      if (state.startupAnimation) {
-        logger.app("lifecycle", "info", "startup animation resolved", {
-          data: JSON.stringify({
-            fileName: state.startupAnimation.descriptor.fileName,
-            byteLength: state.startupAnimation.descriptor.byteLength,
-          }),
-        });
-      }
-    }
-    await ensureWindow();
     if (process.env.PI_DESKTOP_MCP_CONTROL === "1") {
       try {
         state.mcpControl = new McpControlServer({
@@ -431,6 +431,7 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
     // did-finish-load), so the page is up; give React a beat to mount its
     // event subscriptions before pushing the boot outcome.
     setTimeout(() => {
+      bootMark("hostStatus sent");
       sendToRenderer(IPC.event.hostStatus, bootHostStatus(bootError));
       state.applicationBooted = true;
       flushPendingApplicationMenuCommands();
@@ -515,10 +516,11 @@ export function registerApplicationStartup(deps: StartupDependencies): void {
             probe.ctrlRBlocked = ctrlRPrevented;
             probe.appName = app.getName();
             probe.menuCount = Menu.getApplicationMenu()?.items.length ?? 0;
-            if (!host || !window) throw new Error("session-list probe requires a healthy desktop");
+            const probeHost = getHost();
+            if (!probeHost || !window) throw new Error("session-list probe requires a healthy desktop");
             probe.sessionList = await runSessionListProbe({
               dataDir,
-              host,
+              host: probeHost,
               window,
               catalog: modelsDevCatalog,
             });

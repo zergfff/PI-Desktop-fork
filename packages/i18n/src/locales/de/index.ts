@@ -2494,6 +2494,7 @@ sklm: {
       "error": "Dieser Speicherort konnte nicht gelesen werden",
       "back": "Zurück zu Dateien",
       "reveal": "Im Finder anzeigen",
+      "reload": "Von der Festplatte neu laden",
       "binary": "Binärdatei – Vorschau nicht verfügbar",
       "tooLarge": "Datei ist zu groß für die Vorschau",
       "openFailed": "Die Datei konnte nicht mit der Standardanwendung geöffnet werden."

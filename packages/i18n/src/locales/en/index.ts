@@ -2514,6 +2514,7 @@ sklm: {
       error: "Couldn't read this location",
       back: "Back to files",
       reveal: "Reveal in Finder",
+      reload: "Reload from disk",
       binary: "Binary file — preview unavailable",
       tooLarge: "File is too large to preview",
       openFailed: "Could not open the file with its default application.",

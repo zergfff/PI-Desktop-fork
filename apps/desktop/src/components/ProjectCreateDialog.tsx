@@ -339,11 +339,6 @@ function ProjectCreateDialogContent({ initialRemoteHostKey }: { initialRemoteHos
                   <IconBranch size={15} aria-hidden />
                   {t("project.createSourceGit")}
                 </Button>
-                <Button type="button" className={`project-create-dialog-source-option${source === "remote" ? " is-active" : ""}`}
-                  data-project-source="remote" aria-pressed={source === "remote"} disabled={busy}
-                  onClick={() => setSource("remote")}>
-                  <IconMonitor size={15} aria-hidden />{t("remote:remote")}
-                </Button>
               </div>
             </section>
 

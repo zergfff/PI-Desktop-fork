@@ -178,6 +178,7 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
     labelKey: "liveVoice.title",
     titleKey: "liveVoice.title",
     group: "preferences",
+    developmentOnly: true,
     keywordKeys: [
       "liveVoice.title",
       "liveVoice.description",
@@ -382,6 +383,7 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
     labelKey: "settings.nav.sync",
     titleKey: "settings.configSync.title",
     group: "system",
+    developmentOnly: true,
     experimentalBadgeKey: "settings.configSync.experimental",
     keywordKeys: [
       "settings.configSync.experimental",
@@ -398,6 +400,7 @@ export const SETTINGS_NAV: SettingsNavEntry[] = [
     labelKey: "settings.nav.remoteHosts",
     titleKey: "settings.remoteHosts.title",
     group: "system",
+    developmentOnly: true,
     experimentalBadgeKey: "settings.remoteHosts.experimental",
     keywordKeys: [
       "settings.remoteHosts.title",

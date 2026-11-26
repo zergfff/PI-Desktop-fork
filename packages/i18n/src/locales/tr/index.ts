@@ -2504,6 +2504,7 @@ sklm: {
       error: "Bu konum okunamadı",
       back: "Dosyalara dön",
       reveal: "Finder’da göster",
+      reload: "Diskten yeniden yükle",
       binary: "İkili dosya — önizleme yok",
       tooLarge: "Dosya önizlemek için çok büyük",
       openFailed: "Dosya varsayılan uygulamayla açılamadı.",

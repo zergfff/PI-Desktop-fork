@@ -2460,6 +2460,7 @@ export const ptBR = {
       error: "Não foi possível ler este local",
       back: "Voltar aos arquivos",
       reveal: "Revelar no Finder",
+      reload: "Recarregar do disco",
       binary: "Arquivo binário — pré-visualização indisponível",
       tooLarge: "O arquivo é grande demais para pré-visualização",
       openFailed: "Não foi possível abrir o arquivo com o aplicativo padrão."

@@ -2494,6 +2494,7 @@ sklm: {
       "error": "Impossible de lire cet emplacement",
       "back": "Retour aux fichiers",
       "reveal": "Révéler dans le Finder",
+      "reload": "Recharger depuis le disque",
       "binary": "Fichier binaire — aperçu indisponible",
       "tooLarge": "Le fichier est trop volumineux pour être prévisualisé",
       "openFailed": "Impossible d’ouvrir le fichier avec l’application par défaut."

@@ -2489,6 +2489,7 @@ sklm: {
       error: "无法读取此位置",
       back: "返回文件列表",
       reveal: "在 Finder 中显示",
+      reload: "从磁盘重新读取",
       binary: "二进制文件，无法预览",
       tooLarge: "文件过大，无法预览",
       openFailed: "无法使用系统默认应用打开文件。",

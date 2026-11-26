@@ -51,69 +51,61 @@ const settingsPrimitives = readFileSync(
 const identity = (key) => key;
 const developerOnlyIds = SETTINGS_NAV.filter(entry => entry.developerOnly === true).map(entry => entry.id);
 
-test("Live Voice is reachable in every build without developer mode", () => {
+test("Live Voice is omitted from packaged builds", () => {
   for (const developerMode of [false, true]) {
-    for (const includeDevelopmentOnly of [false, true]) {
-      assert.ok(visibleSettingsNav(developerMode, includeDevelopmentOnly)
-        .some((entry) => entry.id === "voice"));
-      assert.equal(isSettingsDestinationHidden("voice", developerMode, includeDevelopmentOnly), false);
-      for (const query of [
-        "liveVoice.title",
-        "liveVoice.enable",
-        "liveVoice.provider",
-        "liveVoice.adapters.codex-live.title",
-        "liveVoice.adapters.gemini-live.title",
-        "liveVoice.adapters.openai-realtime.title",
-      ]) {
-        assert.ok(searchSettings(query, identity, { developerMode, includeDevelopmentOnly })
-          .some((hit) => hit.tab === "voice"));
-      }
+    // Fork build: the voice destination exists for development work only.
+    assert.equal(visibleSettingsNav(developerMode, false)
+      .some((entry) => entry.id === "voice"), false);
+    assert.equal(isSettingsDestinationHidden("voice", developerMode, false), true);
+    for (const query of ["liveVoice.title", "liveVoice.enable", "liveVoice.provider"]) {
+      assert.equal(searchSettings(query, identity, { developerMode, includeDevelopmentOnly: false })
+        .some((hit) => hit.tab === "voice"), false);
     }
+    // Development builds keep it, so the surface itself stays testable.
+    assert.equal(visibleSettingsNav(developerMode, true)
+      .some((entry) => entry.id === "voice"), true);
   }
-  // Voice is a regular Preferences destination now: no Experimental badge on
-  // the rail row or the page title.
   assert.equal(
-    SETTINGS_NAV.find((entry) => entry.id === "voice")?.experimentalBadgeKey,
-    undefined,
+    SETTINGS_NAV.find((entry) => entry.id === "voice")?.developmentOnly,
+    true,
   );
 });
 
-test("Cloud sync is Experimental and available in every build", () => {
+test("Cloud sync is omitted from packaged builds", () => {
   for (const developerMode of [false, true]) {
-    for (const includeDevelopmentOnly of [false, true]) {
-      assert.ok(visibleSettingsNav(developerMode, includeDevelopmentOnly)
-        .some((entry) => entry.id === "sync"));
-      assert.equal(isSettingsDestinationHidden("sync", developerMode, includeDevelopmentOnly), false);
-      for (const query of [
-        "configSync.experimental",
-        "configSync.connectionTitle",
-        "configSync.endpoint",
-        "configSync.syncNow",
-      ]) {
-        assert.ok(searchSettings(query, identity, {
-          developerMode,
-          includeDevelopmentOnly,
-        }).some((hit) => hit.tab === "sync"));
-      }
+    // Fork build: cloud sync stays in the source tree but has no packaged
+    // entry point, so no screen can start a sync.
+    assert.equal(visibleSettingsNav(developerMode, false)
+      .some((entry) => entry.id === "sync"), false);
+    assert.equal(isSettingsDestinationHidden("sync", developerMode, false), true);
+    for (const query of [
+      "configSync.experimental",
+      "configSync.connectionTitle",
+      "configSync.endpoint",
+      "configSync.syncNow",
+    ]) {
+      assert.equal(searchSettings(query, identity, {
+        developerMode,
+        includeDevelopmentOnly: false,
+      }).some((hit) => hit.tab === "sync"), false);
     }
+    assert.equal(visibleSettingsNav(developerMode, true)
+      .some((entry) => entry.id === "sync"), true);
   }
-  const sync = SETTINGS_NAV.find((entry) => entry.id === "sync");
-  assert.equal(sync?.developerOnly, undefined);
-  assert.equal(sync?.developmentOnly, undefined);
-  assert.equal(sync?.experimentalBadgeKey, "settings.configSync.experimental");
+  assert.equal(SETTINGS_NAV.find((entry) => entry.id === "sync")?.developmentOnly, true);
 });
 
-test("Remote Hosts is Experimental and available in every build", () => {
+test("Remote Hosts is omitted from packaged builds", () => {
   for (const developerMode of [false, true]) {
-    for (const includeDevelopmentOnly of [false, true]) {
-      assert.ok(visibleSettingsNav(developerMode, includeDevelopmentOnly)
-        .some((entry) => entry.id === "remoteHosts"));
-      assert.equal(isSettingsDestinationHidden("remoteHosts", developerMode, includeDevelopmentOnly), false);
-    }
+    assert.equal(visibleSettingsNav(developerMode, false)
+      .some((entry) => entry.id === "remoteHosts"), false);
+    assert.equal(isSettingsDestinationHidden("remoteHosts", developerMode, false), true);
+    assert.equal(visibleSettingsNav(developerMode, true)
+      .some((entry) => entry.id === "remoteHosts"), true);
   }
   assert.equal(
-    SETTINGS_NAV.find((entry) => entry.id === "remoteHosts")?.experimentalBadgeKey,
-    "settings.remoteHosts.experimental",
+    SETTINGS_NAV.find((entry) => entry.id === "remoteHosts")?.developmentOnly,
+    true,
   );
 });
 
@@ -134,7 +126,7 @@ test("developer mode retains the developer-only destinations in development", ()
     SETTINGS_NAV.filter((entry) => entry.developerOnly === true)
       .every((entry) => entry.experimentalBadgeKey),
   );
-  // Cloud sync remains available in development builds.
+  // Cloud sync remains in development builds (default includeDevelopmentOnly).
   assert.equal(off.includes("sync"), true);
 });
 
@@ -144,10 +136,12 @@ test("packaged builds hide developer-only destinations and retain Experimental s
     assert.equal(packaged.includes(id), false);
     assert.equal(isSettingsDestinationHidden(id, true, false), true);
   }
-  for (const id of ["sync", "remoteHosts"]) {
-    assert.equal(packaged.includes(id), true);
-    assert.equal(isSettingsDestinationHidden(id, true, false), false);
-    assert.equal(isSettingsDestinationHidden(id, false, false), false);
+  // Fork build: voice, cloud sync and remote hosts are packaged-out, so a
+  // packaged rail carries none of them.
+  for (const id of ["voice", "sync", "remoteHosts"]) {
+    assert.equal(packaged.includes(id), false);
+    assert.equal(isSettingsDestinationHidden(id, true, false), true);
+    assert.equal(isSettingsDestinationHidden(id, false, false), true);
   }
   assert.equal(isSettingsDestinationHidden("appearance", true, false), false);
 });
@@ -178,16 +172,17 @@ test("settings search mirrors developer and packaged visibility", () => {
     { developerMode: false, includeDevelopmentOnly: false },
     { developerMode: true, includeDevelopmentOnly: false },
   ]) {
-    assert.ok(
+    assert.equal(
       searchSettings("configSync.connectionTitle", identity, options)
-        .some((hit) => hit.tab === "sync"),
+        .some((hit) => hit.tab === "sync"), false,
     );
   }
 
   for (const developerMode of [false, true]) {
     for (const includeDevelopmentOnly of [false, true]) {
-      assert.ok(searchSettings("remotehosts", identity, { developerMode, includeDevelopmentOnly })
-        .some(hit => hit.tab === "remoteHosts"));
+      const found = searchSettings("remotehosts", identity, { developerMode, includeDevelopmentOnly })
+        .some(hit => hit.tab === "remoteHosts");
+      assert.equal(found, includeDevelopmentOnly);
     }
   }
   assert.equal(searchSettings("settings", identity, { limit: 2 }).length, 2);
