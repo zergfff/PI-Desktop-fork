@@ -20,10 +20,14 @@ import {
   installAdblock,
   loadAdblockRules,
   readAdblockEnabled,
+  readAdblockSettings,
+  refreshOnlineLists,
   writeAdblockEnabled,
+  writeAdblockSettings,
   type AdblockRuleSet,
 } from "./browser-adblock";
 import { desktopDataDir } from "./data-paths";
+import { activeDownloadsDir, downloadRegistry } from "./browser-downloads";
 
 /**
  * Work panel embedded preview browser (D100, ADR 0019).
@@ -62,50 +66,6 @@ function reloadAdblockRules(): AdblockRuleSet {
 }
 
 /** Where the pane drops downloaded files; the OS default, not a private folder. */
-function downloadsDir(): string {
-  try {
-    return app.getPath("downloads");
-  } catch {
-    return join(homedir(), "Downloads");
-  }
-}
-
-const downloadSessions = new WeakSet<object>();
-
-/**
- * Save downloads to the OS Downloads folder instead of prompting per file.
- *
- * Electron's default is a save dialog per download, which fights the panel's
- * model of "this is a browser, downloading is normal". Collisions get a numeric
- * suffix so nothing is silently overwritten.
- */
-function ensureDownloads(session: Electron.Session): void {
-  if (downloadSessions.has(session)) return;
-  downloadSessions.add(session);
-  session.on("will-download", (_event, item) => {
-    const dir = downloadsDir();
-    try {
-      mkdirSync(dir, { recursive: true });
-    } catch {
-      return;
-    }
-    const name = item.getFilename() || "download";
-    const dot = name.lastIndexOf(".");
-    const stem = dot > 0 ? name.slice(0, dot) : name;
-    const extension = dot > 0 ? name.slice(dot) : "";
-    let target = join(dir, name);
-    for (let index = 1; existsSync(target) && index < 1000; index += 1) {
-      target = join(dir, `${stem} (${index})${extension}`);
-    }
-    item.setSavePath(target);
-    item.once("done", (_doneEvent, state) => {
-      if (state !== "completed") {
-        console.warn(`[browser] download ${state}: ${name}`);
-      }
-    });
-  });
-}
-
 function ensureAdblock(session: Electron.Session): void {
   if (adblockSessions.has(session)) return;
   adblockSessions.add(session);
@@ -244,18 +204,23 @@ export class BrowserPane {
   private findStylesInjected = false;
   /** Key of the inserted cosmetic CSS, so a toggle can remove it again. */
   private cosmeticKey: string | null = null;
+  private downloadsSubscribed = false;
 
   private readonly onOpenUrl?: (url: string) => void;
+  /** Ask the host for another browser tab showing `url`. */
+  private readonly onNewTab?: (url: string) => void;
   private readonly backingHost: BrowserBackingHost;
 
   constructor(
     onState: (state: BrowserState) => void,
     onOpenUrl?: (url: string) => void,
     backingHost = BrowserPane.sharedBackingHost,
+    onNewTab?: (url: string) => void,
   ) {
     this.onState = onState;
     this.onOpenUrl = onOpenUrl;
     this.backingHost = backingHost;
+    this.onNewTab = onNewTab;
   }
 
   setWindow(window: BrowserWindow | null): void {
@@ -283,7 +248,26 @@ export class BrowserPane {
       ...(this.loadError ? { loadError: this.loadError.message } : {}),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
+      ...(readAdblockEnabled(adblockDir())
+        ? { blocked: adblockRuntime.snapshot().blocked }
+        : {}),
+      ...(this.downloads.length
+        ? {
+            downloads: this.downloads.map((item) => ({
+              id: item.id,
+              filename: item.filename,
+              state: item.state,
+              receivedBytes: item.receivedBytes,
+              totalBytes: item.totalBytes,
+            })),
+          }
+        : {}),
     };
+  }
+
+  /** Newest-first download list, mirrored into the state the chrome reads. */
+  get downloads() {
+    return downloadRegistry.list();
   }
 
   getWebContents() {
@@ -794,6 +778,75 @@ export class BrowserPane {
           if (!wc.isDestroyed()) wc.reload();
         },
       },
+      {
+        label: label(
+          (() => {
+            const settings = readAdblockSettings(adblockDir());
+            const count = settings.listUrls?.length ?? 0;
+            const when = settings.listsUpdatedAt
+              ? new Date(settings.listsUpdatedAt).toLocaleDateString()
+              : "从未";
+            return count ? `更新在线规则（${count} 个源，上次 ${when}）` : "更新在线规则（未配置）";
+          })(),
+          "Update online lists",
+        ),
+        enabled: Boolean(readAdblockSettings(adblockDir()).listUrls?.length),
+        click: () => {
+          void (async () => {
+            const result = await refreshOnlineLists(adblockDir());
+            reloadAdblockRules();
+            if (!wc.isDestroyed()) wc.reload();
+            await dialog.showMessageBox({
+              type: result.failed.length ? "warning" : "info",
+              message: `在线规则：成功 ${result.updated} 个来源`,
+              detail: result.failed.length
+                ? result.failed.map((item) => `${item.url}\n  ${item.error}`).join("\n")
+                : "规则已重新加载，页面已刷新。",
+            });
+          })();
+        },
+      },
+      {
+        label: label("启用 / 停用 EasyList China", "Toggle EasyList China"),
+        click: () => {
+          const settings = readAdblockSettings(adblockDir());
+          const source = "https://easylist-downloads.adblockplus.org/easylistchina.txt";
+          const enabled = (settings.listUrls ?? []).includes(source);
+          writeAdblockSettings(adblockDir(), {
+            ...settings,
+            listUrls: enabled ? (settings.listUrls ?? []).filter((url) => url !== source) : [...(settings.listUrls ?? []), source],
+          });
+          if (!enabled) {
+            void (async () => {
+              const result = await refreshOnlineLists(adblockDir());
+              reloadAdblockRules();
+              if (!wc.isDestroyed()) wc.reload();
+              await dialog.showMessageBox({
+                type: result.failed.length ? "warning" : "info",
+                message: result.failed.length ? "EasyList China 下载失败" : "EasyList China 已启用",
+                detail: result.failed.length
+                  ? result.failed.map((item) => item.error).join("\n")
+                  : "已下载并合并，页面已刷新。",
+              });
+            })();
+          } else {
+            reloadAdblockRules();
+            if (!wc.isDestroyed()) wc.reload();
+          }
+        },
+      },
+      {
+        label: label("规则来源设置…", "Rule sources…"),
+        click: () => void shell.openPath(join(adblockDir(), "adblock.json")),
+      },
+      {
+        label: label("在新标签页打开", "Open in new tab"),
+        enabled: Boolean(this.onNewTab) && isAllowedHttpUrl(wc.getURL()),
+        click: () => {
+          const target = wc.getURL();
+          if (target && this.onNewTab) this.onNewTab(target);
+        },
+      },
       { type: "separator" },
       {
         label: label("开发者工具", "Developer tools"),
@@ -802,8 +855,12 @@ export class BrowserPane {
         },
       },
       {
+        label: label("更改下载文件夹…", "Change download folder…"),
+        click: () => void downloadRegistry.chooseDirectory(),
+      },
+      {
         label: label("打开下载目录", "Open downloads folder"),
-        click: () => void shell.openPath(downloadsDir()),
+        click: () => void shell.openPath(activeDownloadsDir()),
       },
       { type: "separator" },
       {
@@ -884,7 +941,17 @@ export class BrowserPane {
     this.surface = surface;
     const wc = view.webContents;
     ensureAdblock(wc.session);
-    ensureDownloads(wc.session);
+    downloadRegistry.attach(wc.session);
+    downloadRegistry.setWindowProvider(() => this.window ?? BrowserWindow.getFocusedWindow());
+    if (!this.downloadsSubscribed) {
+      this.downloadsSubscribed = true;
+      // Progress arrives outside the page's own events; re-publish so the chrome
+      // can render a bar instead of a frozen number.
+      downloadRegistry.subscribe(() => {
+        const state = this.getState();
+        if (state) this.onState(state);
+      });
+    }
     this.installPageChrome(wc);
     wc.setWindowOpenHandler(({ url }) => {
       const allowed = parseAllowedExternalUrl(url);

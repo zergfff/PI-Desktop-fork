@@ -115,6 +115,17 @@ export type WorkspaceDiff = {
 
 export type BrowserAction = "back" | "forward" | "reload" | "stop";
 
+export type BrowserDownloadState = "progressing" | "completed" | "cancelled" | "interrupted";
+
+/** One download the pane started, as the chrome renders it. */
+export type BrowserDownloadInfo = {
+  id: string;
+  filename: string;
+  state: BrowserDownloadState;
+  receivedBytes: number;
+  totalBytes: number;
+};
+
 export type BrowserState = {
   /** Main-owned origin for retained browser resource tabs. */
   sessionId?: string;
@@ -126,4 +137,8 @@ export type BrowserState = {
   isLoading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  /** Requests the ad blocker cancelled for this document. */
+  blocked?: number;
+  /** Downloads of the shared browser partition, newest first. */
+  downloads?: BrowserDownloadInfo[];
 };

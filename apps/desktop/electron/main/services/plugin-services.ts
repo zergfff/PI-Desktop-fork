@@ -723,7 +723,8 @@ export function createPluginServices({
   pluginPanels.addSenderResolver((senderId) => pluginViews.pluginIdForSender(senderId));
   const browserBackingHost = new BrowserBackingHost();
   const browserHost = new BrowserHost({
-    createPane: (onState, onOpenUrl) => new BrowserPane(onState, onOpenUrl, browserBackingHost),
+    createPane: (onState, onOpenUrl, onNewTab) =>
+      new BrowserPane(onState, onOpenUrl, browserBackingHost, onNewTab),
     onOpenUrl: (url, sessionId) => {
       void (async () => {
         const settings = await getHost()?.call<AppSettings>("settings.get");

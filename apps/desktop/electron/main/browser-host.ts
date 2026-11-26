@@ -78,7 +78,11 @@ function asRect(value: unknown): BrowserRect | null {
 }
 
 export type BrowserHostDeps = {
-  createPane: (onState: (state: BrowserState) => void, onOpenUrl: (url: string) => void) => BrowserPane;
+  createPane: (
+    onState: (state: BrowserState) => void,
+    onOpenUrl: (url: string) => void,
+    onNewTab?: (url: string) => void,
+  ) => BrowserPane;
   onOpenUrl?: (url: string, sessionId?: string) => void;
   isPluginLoaded: (pluginId: string) => boolean;
   getFileRoots: (sessionId?: string) => Promise<readonly string[]>;
@@ -306,6 +310,12 @@ export class BrowserHost {
         },
         (url) => {
           if (this.pages.get(key) === page) this.deps.onOpenUrl?.(url, sessionId || undefined);
+        },
+        (url) => {
+          // A second browser page is a second work-panel tab; opening it from the
+          // page menu is the only creation path a reader has.
+          if (this.pages.get(key) !== page) return;
+          void this.openTab({ url }, sessionId);
         },
       ),
     };

@@ -132,6 +132,7 @@ import {
 import { DevPluginWatcher, type DevPluginWatcherDeps } from "./plugin-watcher";
 import { parseAllowedExternalUrl } from "./safe-open-external";
 import type { PluginAppearance } from "../shared/plugin-panel-chrome";
+import { downloadRegistry } from "./browser-downloads";
 import type { McpControlController, McpControlInvokeInput } from "./mcp-control";
 import {
   PluginSocketError,
@@ -675,6 +676,8 @@ const HOST_API_ALLOWLIST = new Set([
   "browser.setBounds",
   "browser.setVisible",
   "browser.getState",
+  "browser.cancelDownload",
+  "browser.chooseDownloadFolder",
   "browser.openExternal",
   "browser.snapshot",
   "browser.screenshot",
@@ -2727,6 +2730,10 @@ export class PluginRuntime {
         return this.invokeBrowser(loaded, "setVisible", payload);
       case "browser.getState":
         return this.invokeBrowser(loaded, "getState", payload);
+      case "browser.cancelDownload":
+        return this.invokeBrowser(loaded, "cancelDownload", payload);
+      case "browser.chooseDownloadFolder":
+        return this.invokeBrowser(loaded, "chooseDownloadFolder", payload);
       case "browser.openExternal":
         return this.invokeBrowser(loaded, "openExternal", payload);
       case "browser.snapshot":
@@ -5032,6 +5039,10 @@ export class PluginRuntime {
       ? { sessionId: payload.sessionId, tabId: payload.tabId } : undefined;
     const api = this.hostApi(loaded, context).browser;
     switch (method) {
+      case "cancelDownload":
+        return api.cancelDownload({ id: payload?.id });
+      case "chooseDownloadFolder":
+        return api.chooseDownloadFolder();
       case "navigate":
         return api.navigate({
           url: payload?.url != null ? String(payload.url) : undefined,
@@ -6713,6 +6724,23 @@ export class PluginRuntime {
           this.busUnsubscribe(loaded, subscriptionId),
       },
       browser: {
+        cancelDownload: async (input: { id?: unknown } = {}) => {
+          this.assertPermission(loaded, "browser.cdp");
+          const id = typeof input.id === "string" ? input.id : "";
+          const cancelled = id ? downloadRegistry.cancel(id) : false;
+          this.services.audit?.({
+            pluginId,
+            api: "browser.cancelDownload",
+            ok: cancelled,
+            ts: Date.now(),
+          });
+          return { cancelled };
+        },
+        chooseDownloadFolder: async () => {
+          this.assertPermission(loaded, "browser.cdp");
+          const directory = await downloadRegistry.chooseDirectory();
+          return { directory };
+        },
         reveal: async () => {
           this.assertPermission(loaded, "browser.cdp");
           if (!this.services.browser) {

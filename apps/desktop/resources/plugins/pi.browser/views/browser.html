@@ -111,6 +111,96 @@
         color: var(--fg);
       }
       .empty p { margin: 0; max-width: 240px; }
+      .shield {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 24px;
+        padding: 0 7px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted-foreground, #8b8b8b);
+        background: color-mix(in srgb, currentColor 10%, transparent);
+      }
+      .shield[data-active="true"] { color: #2f9e44; }
+      .shield[hidden] { display: none; }
+      .dl { position: relative; }
+      .dl-badge {
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        min-width: 13px;
+        height: 13px;
+        padding: 0 3px;
+        border-radius: 999px;
+        background: var(--accent, #3b82f6);
+        color: #fff;
+        font-size: 9px;
+        line-height: 13px;
+        text-align: center;
+      }
+      .dl-badge[hidden] { display: none; }
+      .dl-pop {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 30;
+        width: 320px;
+        max-height: 320px;
+        overflow: auto;
+        padding: 8px;
+        border-radius: 10px;
+        border: 1px solid var(--border, #2a2a2a);
+        background: var(--card, #1b1b1b);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+      }
+      .dl-pop[hidden] { display: none; }
+      .dl-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 2px 2px 6px;
+        font-size: 11px;
+        color: var(--muted-foreground, #8b8b8b);
+      }
+      .dl-head button {
+        height: 22px;
+        padding: 0 8px;
+        border-radius: 6px;
+        font-size: 11px;
+      }
+      .dl-empty { padding: 12px 6px; font-size: 12px; color: var(--muted-foreground, #8b8b8b); }
+      .dl-item { padding: 6px 4px; border-top: 1px solid var(--border, #2a2a2a); }
+      .dl-item:first-of-type { border-top: 0; }
+      .dl-name {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .dl-name span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dl-state { flex: none; font-size: 10px; color: var(--muted-foreground, #8b8b8b); }
+      .dl-bar {
+        margin-top: 4px;
+        height: 4px;
+        border-radius: 999px;
+        background: color-mix(in srgb, currentColor 14%, transparent);
+        overflow: hidden;
+      }
+      .dl-bar > i { display: block; height: 100%; background: var(--accent, #3b82f6); width: 0; }
+      .dl-item[data-state="completed"] .dl-bar > i { background: #2f9e44; }
+      .dl-item[data-state="cancelled"] .dl-bar > i,
+      .dl-item[data-state="interrupted"] .dl-bar > i { background: #e03131; }
+      .dl-cancel {
+        margin-top: 4px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 5px;
+        font-size: 10px;
+      }
     </style>
   </head>
   <body>
@@ -128,6 +218,23 @@
         <form class="url" id="form">
           <input id="url" spellcheck="false" autocapitalize="off" autocorrect="off" />
         </form>
+        <div class="shield" id="shield" hidden data-active="false">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+          <span id="shield-count">0</span>
+        </div>
+        <div class="dl">
+          <button type="button" class="icon-btn" id="downloads" title="Downloads" aria-label="Downloads">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>
+            <span class="dl-badge" id="dl-badge" hidden>0</span>
+          </button>
+          <div class="dl-pop" id="dl-pop" hidden>
+            <div class="dl-head">
+              <span id="dl-title">Downloads</span>
+              <button type="button" id="dl-folder">更改文件夹</button>
+            </div>
+            <div id="dl-list"><div class="dl-empty">还没有下载</div></div>
+          </div>
+        </div>
         <button type="button" class="icon-btn" id="external" disabled title="Open externally" aria-label="Open externally">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5"/><path d="M19 5l-9 9"/><path d="M5 9v10h10"/></svg>
         </button>
@@ -148,6 +255,14 @@
       const form = document.getElementById("form");
       const input = document.getElementById("url");
       const guest = document.getElementById("guest");
+      const shield = document.getElementById("shield");
+      const shieldCount = document.getElementById("shield-count");
+      const downloadsButton = document.getElementById("downloads");
+      const downloadsBadge = document.getElementById("dl-badge");
+      const downloadsPop = document.getElementById("dl-pop");
+      const downloadsList = document.getElementById("dl-list");
+      const downloadsTitle = document.getElementById("dl-title");
+      const downloadsFolder = document.getElementById("dl-folder");
       const empty = document.getElementById("empty");
       const emptyTitle = document.getElementById("empty-title");
       const emptyBody = document.getElementById("empty-body");
@@ -243,6 +358,13 @@
         reload.title = state?.isLoading ? t("stop") : t("reload");
         reload.setAttribute("aria-label", reload.title);
         if (contextChanged || !inputFocused) input.value = state?.url ?? "";
+        // The blocker runs in the host, so its count arrives with the state.
+        const blocked = Number(state?.blocked ?? 0);
+        shield.hidden = !(blocked > 0);
+        shield.dataset.active = blocked > 0 ? "true" : "false";
+        shieldCount.textContent = String(blocked);
+        shield.title = blocked > 0 ? `已拦截 ${blocked} 个请求` : "";
+        renderDownloads(state?.downloads ?? []);
         reportHole();
       };
 
@@ -257,6 +379,66 @@
         void bridge.invoke("browser.setBounds", hole);
         void bridge.invoke("browser.setVisible", { visible: started && hole.width > 0 && hole.height > 0 });
       };
+
+      const formatBytes = (bytes) => {
+        if (!bytes) return "0 B";
+        const units = ["B", "KB", "MB", "GB"];
+        let value = bytes;
+        let index = 0;
+        while (value >= 1024 && index < units.length - 1) { value /= 1024; index += 1; }
+        return `${value < 10 && index > 0 ? value.toFixed(1) : Math.round(value)} ${units[index]}`;
+      };
+
+      const stateText = (item) => {
+        if (item.state === "completed") return "已完成";
+        if (item.state === "cancelled") return "已取消";
+        if (item.state === "interrupted") return "失败";
+        if (item.totalBytes > 0) return `${Math.round((item.receivedBytes / item.totalBytes) * 100)}%`;
+        return formatBytes(item.receivedBytes);
+      };
+
+      const renderDownloads = (items) => {
+        const active = items.filter((item) => item.state === "progressing").length;
+        downloadsBadge.hidden = active === 0;
+        downloadsBadge.textContent = String(active);
+        downloadsTitle.textContent = items.length ? `下载（${items.length}）` : "下载";
+        if (!items.length) {
+          downloadsList.innerHTML = '<div class="dl-empty">还没有下载</div>';
+          return;
+        }
+        downloadsList.innerHTML = items
+          .map((item) => {
+            const percent = item.totalBytes > 0
+              ? Math.min(100, Math.round((item.receivedBytes / item.totalBytes) * 100))
+              : item.state === "completed" ? 100 : 0;
+            const cancel = item.state === "progressing"
+              ? `<button type="button" class="dl-cancel" data-cancel="${item.id}">取消</button>` : "";
+            return `<div class="dl-item" data-state="${item.state}">
+              <div class="dl-name"><span title="${item.filename}">${item.filename}</span><span class="dl-state">${stateText(item)}</span></div>
+              <div class="dl-bar"><i style="width:${percent}%"></i></div>
+              ${cancel}
+            </div>`;
+          })
+          .join("");
+      };
+
+      downloadsButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        downloadsPop.hidden = !downloadsPop.hidden;
+      });
+      downloadsFolder.addEventListener("click", () => {
+        void bridge.invoke("browser.chooseDownloadFolder");
+      });
+      downloadsList.addEventListener("click", (event) => {
+        const id = event.target?.dataset?.cancel;
+        if (!id) return;
+        void bridge.invoke("browser.cancelDownload", { id });
+      });
+      document.addEventListener("click", (event) => {
+        if (!downloadsPop.hidden && !downloadsPop.contains(event.target) && event.target !== downloadsButton) {
+          downloadsPop.hidden = true;
+        }
+      });
 
       form.addEventListener("submit", (event) => {
         event.preventDefault();

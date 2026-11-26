@@ -18,7 +18,8 @@
  * Options after `$` are dropped, so `$third-party,script` degrades to a plain
  * block rather than being misread.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Session } from "electron";
 
@@ -183,7 +184,7 @@ export function parseAdblockRules(text: string): AdblockRuleSet {
 /** Read and parse the list; a missing file yields the starter rules. */
 export function loadAdblockRules(dataDir: string): AdblockRuleSet {
   const file = ensureAdblockList(dataDir);
-  return parseAdblockRules(readFileSync(file, "utf8"));
+  return mergeOnlineLists(dataDir, parseAdblockRules(readFileSync(file, "utf8")));
 }
 
 /**
@@ -228,27 +229,146 @@ export function adblockShouldBlock(rules: AdblockRuleSet, url: string): boolean 
   );
 }
 
-type AdblockState = { enabled: boolean };
+type AdblockState = {
+  enabled: boolean;
+  /**
+   * Online lists to merge in, in Addition to `adblock.txt`. Only `||host^` rules
+   * are taken from them: a full EasyList is ~50k lines of path regexes, and
+   * compiling those on every load costs more than the blocking is worth. Host
+   * rules are a Set lookup and catch the bulk of ad traffic.
+   */
+  listUrls?: string[];
+  /** ISO timestamp of the last successful refresh, for the menu label. */
+  listsUpdatedAt?: string;
+};
 
 /** Persisted on/off switch; blocking is on unless the user turned it off. */
 export function readAdblockEnabled(dataDir: string): boolean {
-  const file = join(dataDir, STATE_FILE);
-  if (!existsSync(file)) return true;
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<AdblockState>;
-    return parsed.enabled !== false;
-  } catch {
-    return true;
-  }
+  return readAdblockSettings(dataDir).enabled;
 }
 
 export function writeAdblockEnabled(dataDir: string, enabled: boolean): void {
+  writeAdblockSettings(dataDir, { ...readAdblockSettings(dataDir), enabled });
+}
+
+/** Whole settings record: the switch, the online sources and their timestamp. */
+export function readAdblockSettings(dataDir: string): Required<Pick<AdblockState, "enabled">> &
+  Pick<AdblockState, "listUrls" | "listsUpdatedAt"> {
+  const file = join(dataDir, STATE_FILE);
+  if (!existsSync(file)) return { enabled: true };
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<AdblockState>;
+    const listUrls = Array.isArray(parsed.listUrls)
+      ? parsed.listUrls.filter((url): url is string => typeof url === "string" && /^https?:\/\//i.test(url.trim()))
+      : undefined;
+    return {
+      enabled: parsed.enabled !== false,
+      ...(listUrls?.length ? { listUrls } : {}),
+      ...(typeof parsed.listsUpdatedAt === "string" ? { listsUpdatedAt: parsed.listsUpdatedAt } : {}),
+    };
+  } catch {
+    return { enabled: true };
+  }
+}
+
+export function writeAdblockSettings(
+  dataDir: string,
+  next: Required<Pick<AdblockState, "enabled">> & Pick<AdblockState, "listUrls" | "listsUpdatedAt">,
+): void {
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(
-    join(dataDir, STATE_FILE),
-    `${JSON.stringify({ enabled } satisfies AdblockState, null, 2)}\n`,
-    "utf8",
-  );
+  writeFileSync(join(dataDir, STATE_FILE), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
+/** Where downloaded lists are cached, one file per source URL. */
+function listCacheDir(dataDir: string): string {
+  return join(dataDir, "adblock-cache");
+}
+
+function listCacheFile(dataDir: string, url: string): string {
+  const hash = createHash("sha1").update(url).digest("hex").slice(0, 16);
+  return join(listCacheDir(dataDir), `${hash}.txt`);
+}
+
+const MAX_LIST_BYTES = 12_000_000;
+
+/**
+ * Download every configured source into the cache.
+ *
+ * A failure of one source never discards another's cache: the caller reports
+ * which URLs failed and the old copy keeps working.
+ */
+export async function refreshOnlineLists(
+  dataDir: string,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<{ updated: number; failed: Array<{ url: string; error: string }> }> {
+  const urls = readAdblockSettings(dataDir).listUrls ?? [];
+  const failed: Array<{ url: string; error: string }> = [];
+  let updated = 0;
+  if (!urls.length) return { updated, failed };
+  const fetchImpl = options.fetchImpl ?? fetch;
+  mkdirSync(listCacheDir(dataDir), { recursive: true });
+  for (const url of urls) {
+    try {
+      const response = await fetchImpl(url, {
+        signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+        headers: { "User-Agent": "PI-Desktop adblock" },
+      });
+      if (!response.ok) {
+        failed.push({ url, error: `HTTP ${response.status}` });
+        continue;
+      }
+      const text = await response.text();
+      if (!text.trim()) {
+        failed.push({ url, error: "empty list" });
+        continue;
+      }
+      if (text.length > MAX_LIST_BYTES) {
+        failed.push({ url, error: `list too large (${text.length} bytes)` });
+        continue;
+      }
+      writeFileSync(listCacheFile(dataDir, url), text, "utf8");
+      updated += 1;
+    } catch (error) {
+      failed.push({ url, error: (error as Error).message ?? String(error) });
+    }
+  }
+  writeAdblockSettings(dataDir, {
+    ...readAdblockSettings(dataDir),
+    listsUpdatedAt: new Date().toISOString(),
+  });
+  return { updated, failed };
+}
+
+/** `||host^` rules from an online list, with cosmetic and path rules skipped. */
+export function parseHostRules(text: string, into: Set<string>): void {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.startsWith("||")) continue;
+    const host = line
+      .slice(2)
+      .split("^")[0]
+      .split("/")[0]
+      .split("$")[0]
+      .replace(/^\*\./, "")
+      .toLowerCase();
+    if (!host || /[*|#]/.test(host) || host.length > 253) continue;
+    into.add(host);
+  }
+}
+
+/** Merge the cached online lists into a rule set (host rules only). */
+export function mergeOnlineLists(dataDir: string, rules: AdblockRuleSet): AdblockRuleSet {
+  const dir = listCacheDir(dataDir);
+  if (!existsSync(dir)) return rules;
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".txt")) continue;
+    try {
+      parseHostRules(readFileSync(join(dir, name), "utf8"), rules.blockHosts);
+    } catch {
+      // a corrupt cache entry must not stop the local list from working
+    }
+  }
+  return rules;
 }
 
 /** Counters for the page menu; one instance per session. */
