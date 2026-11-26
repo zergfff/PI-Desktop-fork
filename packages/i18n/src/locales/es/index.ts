@@ -2470,6 +2470,7 @@ sklm: {
       fileActions: "Acciones del archivo",
       openInternal: "Abrir internamente",
       openExternal: "Abrir externamente",
+      openEditor: "Editar en el administrador de archivos",
       openFolder: "Abrir carpeta",
       openError: "No se pudo abrir el archivo. Puede no estar disponible o estar fuera del espacio permitido.",
       contextLineOption: "{{count}} lines",
@@ -2495,6 +2496,10 @@ sklm: {
       "back": "Volver a los archivos",
       "reveal": "Mostrar en el Finder",
       "reload": "Recargar desde el disco",
+      "actions": "Acciones del archivo",
+      "copyContent": "Copiar el contenido del archivo",
+      "copySelection": "Copiar selección",
+      "openExternal": "Abrir con la aplicación predeterminada",
       "binary": "Archivo binario: vista previa no disponible",
       "tooLarge": "El archivo es demasiado grande para obtener una vista previa",
       "openFailed": "No se pudo abrir el archivo con la aplicación predeterminada."

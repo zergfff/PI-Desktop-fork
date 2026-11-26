@@ -5,13 +5,20 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { FsEntry, FsReadResult } from "@pi-desktop/shared";
 import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import { Markdown } from "../Markdown";
+import { ContextMenu, useContextMenu } from "../ContextMenu";
 import { fileDirOf } from "../../lib/chat-links";
+import {
+  FILE_MANAGER_PLUGIN_TAB,
+  fileManagerPluginTab,
+  hasPluginView,
+} from "../../lib/work-panel-tabs";
 import { Button, cx } from "../ui";
 import { TooltipButton } from "../ui";
 import {
@@ -26,6 +33,7 @@ import {
 import {
   IconChevronLeft,
   IconChevronRight,
+  IconCopy,
   IconExternal,
   IconFileText,
   IconFolder,
@@ -190,6 +198,7 @@ export function FilesTab() {
   const [fileError, setFileError] = useState(false);
   const viewerBodyRef = useRef<HTMLDivElement>(null);
   const fileGeneration = useRef(0);
+  const viewerMenu = useContextMenu();
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selected;
 
@@ -302,6 +311,87 @@ export function FilesTab() {
       showToast(t("panel.files.error"), { variant: "error" });
     }
   }, [selected, selectedMimeType, sessionId, root, applyFile, showToast, t]);
+
+  /**
+   * Right-click inside the preview.
+   *
+   * The pane is a read-only renderer, so the platform menu has nothing to offer
+   * (no input, no editable text) and used to come up empty. These items are the
+   * actions the pane actually owns: re-read from disk, copy what is on screen,
+   * and hand the file to the OS. A live text selection appends its own copy
+   * action through the primitive that snapshots the range before focus moves.
+   */
+  const openViewerMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!selected) return;
+      const path = selected;
+      viewerMenu.openContextMenu(
+        event,
+        {
+          label: t("panel.files.actions"),
+          items: [
+            {
+              id: "reload",
+              label: t("panel.files.reload"),
+              icon: <IconRefresh size={14} />,
+              onSelect: () => void reloadFile(),
+            },
+            {
+              id: "copy-content",
+              label: t("panel.files.copyContent"),
+              icon: <IconCopy size={14} />,
+              disabled: !file || file.kind !== "text",
+              onSelect: () => {
+                if (file && file.kind === "text") void navigator.clipboard.writeText(file.content ?? "");
+              },
+            },
+            {
+              id: "open-editor",
+              label: t("panel.files.openEditor"),
+              icon: <IconFileText size={14} />,
+              // The host panel is a read-only renderer. Editing, saving and the
+              // mtime conflict check already live in the bundled file-manager
+              // plugin, so hand the path over instead of growing a second
+              // write path (and a second path cage) inside the host.
+              disabled:
+                Boolean(remote) ||
+                !hasPluginView(useAppStore.getState().pluginViews, FILE_MANAGER_PLUGIN_TAB),
+              onSelect: () =>
+                useAppStore.getState().openWorkPanelTab(fileManagerPluginTab(path)),
+            },
+            {
+              id: "open-external",
+              label: t("panel.files.openExternal"),
+              icon: <IconExternal size={14} />,
+              separatorBefore: true,
+              disabled: Boolean(remote),
+              onSelect: () => void api.fsOpen(path, selectedMimeType, sessionId),
+            },
+            {
+              id: "reveal",
+              label: t("panel.files.reveal"),
+              icon: <IconFolder size={14} />,
+              disabled: Boolean(remote),
+              onSelect: () => void api.fsReveal(path, sessionId),
+            },
+          ],
+        },
+        (selection) =>
+          selection.trim()
+            ? [
+                {
+                  id: "copy-selection",
+                  label: t("panel.files.copySelection"),
+                  icon: <IconCopy size={14} />,
+                  separatorBefore: true,
+                  onSelect: () => void navigator.clipboard.writeText(selection),
+                },
+              ]
+            : [],
+      );
+    },
+    [selected, selectedMimeType, sessionId, remote, file, reloadFile, viewerMenu, t],
+  );
 
   // Auto-reload while the preview is on screen. Polling beats a watcher here
   // because the renderer has no filesystem access and adding a channel for it
@@ -475,7 +565,7 @@ export function FilesTab() {
             <IconExternal size={14} />
           </TooltipButton> : null}
         </div>
-        <div className="file-viewer-body" ref={viewerBodyRef}>
+        <div className="file-viewer-body" ref={viewerBodyRef} onContextMenu={openViewerMenu}>
           {fileError ? (
             <WorkTabEmpty icon={IconFileText} title={t("panel.files.error")} />
           ) : !file ? (
@@ -510,6 +600,7 @@ export function FilesTab() {
             </WorkTabEmpty>
           )}
         </div>
+        <ContextMenu state={viewerMenu.contextMenu} onClose={viewerMenu.closeContextMenu} />
       </div>
     );
   }

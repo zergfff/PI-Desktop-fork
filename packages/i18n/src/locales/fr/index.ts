@@ -2470,6 +2470,7 @@ sklm: {
       fileActions: "Actions du fichier",
       openInternal: "Ouvrir en interne",
       openExternal: "Ouvrir en externe",
+      openEditor: "Modifier dans le gestionnaire de fichiers",
       openFolder: "Ouvrir le dossier",
       openError: "Impossible d’ouvrir ce fichier. Il est peut-être indisponible ou hors de l’espace autorisé.",
       contextLineOption: "{{count}} lines",
@@ -2495,6 +2496,10 @@ sklm: {
       "back": "Retour aux fichiers",
       "reveal": "Révéler dans le Finder",
       "reload": "Recharger depuis le disque",
+      "actions": "Actions du fichier",
+      "copyContent": "Copier le contenu du fichier",
+      "copySelection": "Copier la sélection",
+      "openExternal": "Ouvrir avec l'application par défaut",
       "binary": "Fichier binaire — aperçu indisponible",
       "tooLarge": "Le fichier est trop volumineux pour être prévisualisé",
       "openFailed": "Impossible d’ouvrir le fichier avec l’application par défaut."

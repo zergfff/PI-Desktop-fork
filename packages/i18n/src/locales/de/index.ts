@@ -2470,6 +2470,7 @@ sklm: {
       fileActions: "Dateiaktionen",
       openInternal: "Intern öffnen",
       openExternal: "Extern öffnen",
+      openEditor: "Im Dateimanager bearbeiten",
       openFolder: "Ordner öffnen",
       openError: "Diese Datei konnte nicht geöffnet werden. Sie ist möglicherweise nicht verfügbar oder außerhalb des erlaubten Arbeitsbereichs.",
       contextLineOption: "{{count}} lines",
@@ -2495,6 +2496,10 @@ sklm: {
       "back": "Zurück zu Dateien",
       "reveal": "Im Finder anzeigen",
       "reload": "Von der Festplatte neu laden",
+      "actions": "Dateiaktionen",
+      "copyContent": "Dateiinhalt kopieren",
+      "copySelection": "Auswahl kopieren",
+      "openExternal": "Mit Standardanwendung öffnen",
       "binary": "Binärdatei – Vorschau nicht verfügbar",
       "tooLarge": "Datei ist zu groß für die Vorschau",
       "openFailed": "Die Datei konnte nicht mit der Standardanwendung geöffnet werden."

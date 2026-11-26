@@ -2436,6 +2436,7 @@ export const ptBR = {
       fileActions: "Ações do arquivo",
       openInternal: "Abrir internamente",
       openExternal: "Abrir externamente",
+      openEditor: "Editar no gerenciador de arquivos",
       openFolder: "Abrir pasta",
       openError: "Não foi possível abrir o arquivo. Ele pode estar indisponível ou fora do espaço permitido.",
       contextLineOption: "{{count}} lines",
@@ -2461,6 +2462,10 @@ export const ptBR = {
       back: "Voltar aos arquivos",
       reveal: "Revelar no Finder",
       reload: "Recarregar do disco",
+      actions: "Ações do arquivo",
+      copyContent: "Copiar o conteúdo do arquivo",
+      copySelection: "Copiar seleção",
+      openExternal: "Abrir com o aplicativo padrão",
       binary: "Arquivo binário — pré-visualização indisponível",
       tooLarge: "O arquivo é grande demais para pré-visualização",
       openFailed: "Não foi possível abrir o arquivo com o aplicativo padrão."
