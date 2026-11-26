@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, Menu, shell, View, WebContentsView, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, Menu, shell, View, WebContentsView, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from "electron";
 import { realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -6,6 +6,11 @@ import type { BrowserState } from "@pi-desktop/shared";
 import { isAllowedHttpUrl, parseAllowedExternalUrl } from "./safe-open-external";
 import { BrowserBackingHost } from "./browser-backing-host";
 import { BROWSER_FIND_SCRIPT, BROWSER_FIND_STYLE } from "./browser-find";
+import {
+  addBrowserExtension,
+  applyBrowserExtensions,
+  openBrowserExtensionsFolder,
+} from "./browser-extensions";
 
 /**
  * Work panel embedded preview browser (D100, ADR 0019).
@@ -500,6 +505,14 @@ export class BrowserPane {
     this.applyZoom(wc);
     wc.on("dom-ready", () => this.applyZoom(wc));
     wc.on("context-menu", (_event, params) => this.showPageMenu(wc, params));
+    // Ctrl/Cmd + wheel, exactly like a browser: Chromium reports the gesture,
+    // the pane owns the factor it has been keeping all along.
+    wc.on("zoom-changed", (_event, direction) => this.zoomBy(wc, direction === "in" ? 0.1 : -0.1));
+    // Pinch is a different gesture with its own limits; the panel zoom above is
+    // the only one that persists per pane.
+    wc.setVisualZoomLevelLimits(1, 1).catch(() => undefined);
+    // Extensions are per session, and a pane may exist before the first page.
+    void applyBrowserExtensions(wc.session);
     wc.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       if (!(input.control || input.meta)) return;
@@ -614,6 +627,31 @@ export class BrowserPane {
       { label: label("适合宽度", "Fit to width"), click: () => void this.fitToWidth(wc) },
       { type: "separator" },
       { label: label("在页面中查找", "Find on page"), accelerator: "CommandOrControl+F", click: () => void this.openFind(wc) },
+      { type: "separator" },
+      {
+        label: label("加载扩展（已解压的文件夹）…", "Load extension (unpacked folder)…"),
+        click: () => {
+          void (async () => {
+            const result = await addBrowserExtension(this.window ?? BrowserWindow.getFocusedWindow());
+            if (!result || "error" in result) {
+              if (result && "error" in result) {
+                await dialog.showMessageBox({
+                  type: "warning",
+                  message: label("无法加载扩展", "Could not load the extension"),
+                  detail: result.error,
+                });
+              }
+              return;
+            }
+            await applyBrowserExtensions(wc.session);
+            this.action("reload");
+          })();
+        },
+      },
+      {
+        label: label("打开扩展文件夹", "Open extensions folder"),
+        click: () => void openBrowserExtensionsFolder(),
+      },
       { label: label("检查元素", "Inspect element"), click: () => wc.inspectElement(params.x, params.y) },
     );
     const window = this.window ?? BrowserWindow.getFocusedWindow();
