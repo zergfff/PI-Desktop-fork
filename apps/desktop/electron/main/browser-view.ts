@@ -652,6 +652,34 @@ export class BrowserPane {
         label: label("打开扩展文件夹", "Open extensions folder"),
         click: () => void openBrowserExtensionsFolder(),
       },
+      ...(() => {
+        // Chrome renders a toolbar icon per extension and hosts its popup; a
+        // WebContentsView has no browser chrome, so the closest honest surface
+        // is a list of what is actually loaded plus the options page each
+        // extension declares. The action popup itself is not reachable from a
+        // host — Electron implements no browser-action UI.
+        const extensions = wc.session.getAllExtensions();
+        if (!extensions.length) return [];
+        return [{
+          label: label(`扩展（${extensions.length}）`, `Extensions (${extensions.length})`),
+          submenu: extensions.map((extension) => {
+            const manifest = extension.manifest as {
+              options_ui?: { page?: string };
+              options_page?: string;
+            };
+            const page = manifest.options_ui?.page ?? manifest.options_page ?? null;
+            return {
+              label: `${extension.name} ${extension.version}`,
+              click: page
+                ? () => {
+                    void wc.loadURL(`chrome-extension://${extension.id}/${page}`).catch(() => undefined);
+                  }
+                : undefined,
+              enabled: Boolean(page),
+            };
+          }),
+        }];
+      })(),
       { label: label("检查元素", "Inspect element"), click: () => wc.inspectElement(params.x, params.y) },
     );
     const window = this.window ?? BrowserWindow.getFocusedWindow();
