@@ -11,6 +11,17 @@ import {
   applyBrowserExtensions,
   openBrowserExtensionsFolder,
 } from "./browser-extensions";
+import {
+  adblockListPath,
+  createAdblockRuntime,
+  ensureAdblockList,
+  installAdblock,
+  loadAdblockRules,
+  readAdblockEnabled,
+  writeAdblockEnabled,
+  type AdblockRuleSet,
+} from "./browser-adblock";
+import { desktopDataDir } from "./data-paths";
 
 /**
  * Work panel embedded preview browser (D100, ADR 0019).
@@ -27,6 +38,39 @@ import {
  */
 
 const PARTITION = "persist:work-browser";
+
+/**
+ * Ad blocking runs in the host, not through the loaded extensions: Electron
+ * grants an extension `declarativeNetRequest` but never enforces its static
+ * rules (measured — a one-rule blocker left `/blocked.js` executing), while
+ * `webRequest.onBeforeRequest` does cancel. One listener per session, so this
+ * installs once and re-reads the user's list on demand.
+ */
+const adblockRuntime = createAdblockRuntime();
+const adblockSessions = new WeakSet<object>();
+let adblockRules: AdblockRuleSet | null = null;
+
+function adblockDir(): string {
+  return desktopDataDir();
+}
+
+function reloadAdblockRules(): AdblockRuleSet {
+  adblockRules = loadAdblockRules(adblockDir());
+  return adblockRules;
+}
+
+function ensureAdblock(session: Electron.Session): void {
+  if (adblockSessions.has(session)) return;
+  adblockSessions.add(session);
+  installAdblock(
+    session,
+    () => ({
+      enabled: readAdblockEnabled(adblockDir()),
+      rules: adblockRules ?? reloadAdblockRules(),
+    }),
+    adblockRuntime,
+  );
+}
 const LIVE_RELOAD_DEBOUNCE_MS = 250;
 
 export function normalizeUrl(raw: string): string | null {
@@ -629,6 +673,35 @@ export class BrowserPane {
       { label: label("在页面中查找", "Find on page"), accelerator: "CommandOrControl+F", click: () => void this.openFind(wc) },
       { type: "separator" },
       {
+        label: label("拦截广告", "Block ads"),
+        type: "checkbox",
+        checked: readAdblockEnabled(adblockDir()),
+        click: (item) => {
+          writeAdblockEnabled(adblockDir(), item.checked);
+          reloadAdblockRules();
+          if (!wc.isDestroyed()) wc.reload();
+        },
+      },
+      {
+        label: label(
+          `本次已拦截 ${adblockRuntime.snapshot().blocked} 个请求`,
+          `${adblockRuntime.snapshot().blocked} requests blocked`,
+        ),
+        enabled: false,
+      },
+      {
+        label: label("编辑拦截规则…", "Edit block list…"),
+        click: () => void shell.openPath(ensureAdblockList(adblockDir())),
+      },
+      {
+        label: label("重新加载规则", "Reload block list"),
+        click: () => {
+          reloadAdblockRules();
+          if (!wc.isDestroyed()) wc.reload();
+        },
+      },
+      { type: "separator" },
+      {
         label: label("加载扩展（已解压的文件夹）…", "Load extension (unpacked folder)…"),
         click: () => {
           void (async () => {
@@ -705,6 +778,7 @@ export class BrowserPane {
     surface.setBounds(this.bounds);
     this.surface = surface;
     const wc = view.webContents;
+    ensureAdblock(wc.session);
     this.installPageChrome(wc);
     wc.setWindowOpenHandler(({ url }) => {
       const allowed = parseAllowedExternalUrl(url);
