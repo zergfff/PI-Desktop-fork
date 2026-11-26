@@ -13,12 +13,9 @@ import { useAppStore } from "../../stores/app-store";
 import { api } from "../../lib/api";
 import { Markdown } from "../Markdown";
 import { ContextMenu, useContextMenu } from "../ContextMenu";
+import { CsvPreview } from "./CsvPreview";
+import { usePreviewFind } from "./usePreviewFind";
 import { fileDirOf } from "../../lib/chat-links";
-import {
-  FILE_MANAGER_PLUGIN_TAB,
-  fileManagerPluginTab,
-  hasPluginView,
-} from "../../lib/work-panel-tabs";
 import { Button, cx } from "../ui";
 import { TooltipButton } from "../ui";
 import {
@@ -33,11 +30,12 @@ import {
 import {
   IconChevronLeft,
   IconChevronRight,
-  IconCopy,
   IconExternal,
   IconFileText,
   IconFolder,
+  IconCopy,
   IconRefresh,
+  IconSearch,
 } from "../icons";
 import { WorkTabEmpty } from "./WorkTabEmpty";
 
@@ -97,7 +95,22 @@ function langForPath(path: string): string | null {
 }
 
 function isMarkdownPath(path: string): boolean {
-  return /\.(?:md|markdown)$/i.test(path);
+  return /\.(?:md|markdown|mdx)$/i.test(path);
+}
+
+/** CSV/TSV get a table instead of a wall of commas. */
+function isDelimitedPath(path: string): boolean {
+  return /\.(?:csv|tsv)$/i.test(path);
+}
+
+/** Office formats are ZIP containers of XML: recognised, not parsed here. */
+function isOfficePath(path: string): boolean {
+  return /\.(?:docx?|xlsx?|pptx?|odt|ods|odp|rtf|pages|numbers|key)$/i.test(path);
+}
+
+/** HTML gets a sandboxed render, with the source one toggle away. */
+function isHtmlPath(path: string): boolean {
+  return /\.(?:html?|xhtml)$/i.test(path);
 }
 
 function isMp4(path: string, mimeType?: string): boolean {
@@ -199,6 +212,10 @@ export function FilesTab() {
   const viewerBodyRef = useRef<HTMLDivElement>(null);
   const fileGeneration = useRef(0);
   const viewerMenu = useContextMenu();
+  const [htmlSource, setHtmlSource] = useState(false);
+  // Find works over the rendered DOM, so it is only meaningful for text
+  // previews (Markdown, code, CSV tables, HTML).
+  const find = usePreviewFind(viewerBodyRef, selected !== null && file?.kind === "text");
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selected;
 
@@ -291,6 +308,7 @@ export function FilesTab() {
     const scrollTop = body?.scrollTop ?? 0;
     setFile(next);
     setFileError(false);
+    find.refresh();
     if (!body) return;
     requestAnimationFrame(() => {
       if (viewerBodyRef.current === body) body.scrollTop = scrollTop;
@@ -313,6 +331,28 @@ export function FilesTab() {
   }, [selected, selectedMimeType, sessionId, root, applyFile, showToast, t]);
 
   /**
+   * The work panel keeps one file tab per session, but this pane's own
+   * selection does not survive a session switch: the panel remounts and the
+   * preview came back empty, so the reader had to find the file again. The tab
+   * still names the path, so restore from it on mount — and only then, so
+   * "back to files" stays a deliberate choice instead of being undone by the
+   * next render.
+   */
+  const activeFileTabPath = useAppStore((state) => {
+    const tab = state.workPanelTabs.find((item) => item.id === state.activeWorkPanelTabId);
+    return tab?.kind === "file" && tab.resource ? tab.resource : null;
+  });
+  const restoredTabPath = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeFileTabPath || selectedRef.current !== null) return;
+    if (restoredTabPath.current === activeFileTabPath) return;
+    restoredTabPath.current = activeFileTabPath;
+    void openFile(activeFileTabPath);
+  }, [activeFileTabPath, openFile]);
+
+
+
+  /**
    * Right-click inside the preview.
    *
    * The pane is a read-only renderer, so the platform menu has nothing to offer
@@ -331,33 +371,17 @@ export function FilesTab() {
           label: t("panel.files.actions"),
           items: [
             {
-              id: "reload",
-              label: t("panel.files.reload"),
+              id: "refresh",
+              label: t("panel.files.refresh"),
               icon: <IconRefresh size={14} />,
               onSelect: () => void reloadFile(),
             },
             {
-              id: "copy-content",
-              label: t("panel.files.copyContent"),
-              icon: <IconCopy size={14} />,
-              disabled: !file || file.kind !== "text",
-              onSelect: () => {
-                if (file && file.kind === "text") void navigator.clipboard.writeText(file.content ?? "");
-              },
-            },
-            {
-              id: "open-editor",
-              label: t("panel.files.openEditor"),
-              icon: <IconFileText size={14} />,
-              // The host panel is a read-only renderer. Editing, saving and the
-              // mtime conflict check already live in the bundled file-manager
-              // plugin, so hand the path over instead of growing a second
-              // write path (and a second path cage) inside the host.
-              disabled:
-                Boolean(remote) ||
-                !hasPluginView(useAppStore.getState().pluginViews, FILE_MANAGER_PLUGIN_TAB),
-              onSelect: () =>
-                useAppStore.getState().openWorkPanelTab(fileManagerPluginTab(path)),
+              id: "find",
+              label: t("panel.files.find"),
+              icon: <IconSearch size={14} />,
+              disabled: file?.kind !== "text",
+              onSelect: () => find.start(),
             },
             {
               id: "open-external",
@@ -422,6 +446,23 @@ export function FilesTab() {
       window.clearInterval(timer);
     };
   }, [selected, selectedMimeType, sessionId, root, file, applyFile]);
+
+  // Ctrl/Cmd+F finds inside the preview while it is the surface in use; the
+  // chat's own search keeps the shortcut everywhere else.
+  useEffect(() => {
+    if (selected === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key !== "f" || event.altKey || event.shiftKey) return;
+      if (!event.ctrlKey && !event.metaKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(?:INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      event.preventDefault();
+      find.start();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selected, find]);
 
   const openMp4 = useCallback(async () => {
     if (!selected || remote) return;
@@ -555,6 +596,25 @@ export function FilesTab() {
           >
             <IconRefresh size={14} />
           </TooltipButton>
+          <TooltipButton
+            type="button"
+            className="icon-btn icon-btn-square"
+            tooltip={t("panel.files.find")}
+            ariaLabel={t("panel.files.find")}
+            disabled={file?.kind !== "text"}
+            onClick={find.start}
+          >
+            <IconSearch size={14} />
+          </TooltipButton>
+          {file?.kind === "text" && isHtmlPath(selected) ? (
+            <button
+              type="button"
+              className="file-viewer-mode"
+              onClick={() => setHtmlSource((current) => !current)}
+            >
+              {htmlSource ? t("panel.files.htmlPreview") : t("panel.files.htmlSource")}
+            </button>
+          ) : null}
           {!remote ? <TooltipButton
             type="button"
             className="icon-btn icon-btn-square"
@@ -565,13 +625,55 @@ export function FilesTab() {
             <IconExternal size={14} />
           </TooltipButton> : null}
         </div>
+        {find.open ? (
+          <div className="file-viewer-find" role="search">
+            <input
+              autoFocus
+              value={find.query}
+              placeholder={t("panel.files.findPlaceholder")}
+              aria-label={t("panel.files.find")}
+              onChange={(event) => find.setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (event.shiftKey) find.previous();
+                  else find.next();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  find.close();
+                }
+              }}
+            />
+            <span className="file-viewer-find-count" role="status">
+              {!find.query.trim() ? "" : find.total ? `${find.position}/${find.total}` : t("panel.files.findNoResults")}
+            </span>
+            <button type="button" onClick={find.previous} aria-label={t("panel.files.findPrevious")} title={t("panel.files.findPrevious")}>↑</button>
+            <button type="button" onClick={find.next} aria-label={t("panel.files.findNext")} title={t("panel.files.findNext")}>↓</button>
+            <button type="button" onClick={find.close} aria-label={t("panel.files.findClose")} title={t("panel.files.findClose")}>×</button>
+          </div>
+        ) : null}
         <div className="file-viewer-body" ref={viewerBodyRef} onContextMenu={openViewerMenu}>
           {fileError ? (
             <WorkTabEmpty icon={IconFileText} title={t("panel.files.error")} />
           ) : !file ? (
             <div className="file-tree-note">{t("panel.files.loading")}</div>
           ) :
-          file.kind === "text" &&
+          file.kind === "text" && isDelimitedPath(selected) ? (
+            <CsvPreview
+              content={file.content ?? ""}
+              delimiter={/\.tsv$/i.test(selected) ? "\t" : ","}
+              t={t}
+            />
+          ) : file.kind === "text" && isHtmlPath(selected) && !htmlSource ? (
+            /* No scripts, no same-origin: a preview, not a browser tab. */
+            <iframe
+              className="file-viewer-html"
+              title={selected}
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={file.content ?? ""}
+            />
+          ) : file.kind === "text" &&
           isMarkdownPath(selected) &&
           selectedLine === undefined ? (
             <div className="file-viewer-markdown prose-chat">
@@ -587,12 +689,14 @@ export function FilesTab() {
             <WorkTabEmpty
               icon={IconFileText}
               title={
-                file.kind === "tooLarge"
-                  ? t("panel.files.tooLarge")
-                  : t("panel.files.binary")
+                isOfficePath(selected)
+                  ? t("panel.files.officeHint")
+                  : file.kind === "tooLarge"
+                    ? t("panel.files.tooLarge")
+                    : t("panel.files.binary")
               }
             >
-              {!remote && isMp4(selected, selectedMimeType) && (
+              {!remote && (isMp4(selected, selectedMimeType) || isOfficePath(selected)) && (
                 <Button type="button" onClick={() => void openMp4()}>
                   {t("chat.openFile")}
                 </Button>

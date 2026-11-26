@@ -24,7 +24,7 @@ const IGNORED_NAMES = new Set([
   ".mypy_cache",
 ]);
 
-export const MAX_TEXT_BYTES = 512 * 1024;
+export const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export const IMAGE_MIME: Record<string, string> = {
@@ -281,6 +281,40 @@ export async function listDir(root: string, rel: string): Promise<FsEntry[]> {
   return entries;
 }
 
+/**
+ * Decode a preview buffer that already passed the binary check.
+ *
+ * Files in the wild are not all UTF-8: Windows tools still write UTF-16 with a
+ * BOM, and Chinese-language exports are routinely GB18030. A blind
+ * `toString("utf8")` turns the latter into mojibake, which the reader then has
+ * to notice and work around — so the encoding is resolved here, once.
+ */
+function decodePreviewText(buffer: Buffer): string {
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return new TextDecoder("utf-16le").decode(buffer.subarray(2));
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return new TextDecoder("utf-16be").decode(buffer.subarray(2));
+  }
+  const utf8 = buffer.toString("utf8");
+  if (!utf8.includes("\uFFFD")) return utf8.replace(/^\uFEFF/, "");
+  try {
+    // Electron ships full ICU, so GB18030 (a superset of GBK) is available
+    // without a dependency. A buffer that is not GB18030 either falls back to
+    // the UTF-8 decoding above rather than failing the preview.
+    return new TextDecoder("gb18030").decode(buffer);
+  } catch {
+    return utf8.replace(/^\uFEFF/, "");
+  }
+}
+
+/** UTF-16 previews carry NUL bytes by construction, so they are classified
+ * before the binary sniff rather than after it. */
+function isUtf16WithBom(buffer: Buffer): boolean {
+  return buffer.length >= 2 &&
+    ((buffer[0] === 0xff && buffer[1] === 0xfe) || (buffer[0] === 0xfe && buffer[1] === 0xff));
+}
+
 function looksBinary(buffer: Buffer): boolean {
   const probe = buffer.subarray(0, Math.min(buffer.length, 8000));
   for (const byte of probe) {
@@ -339,10 +373,10 @@ export async function previewFile(
     return { kind: "tooLarge", size: info.size };
   }
   const buffer = await readFile(fullPath);
-  if (looksBinary(buffer)) {
+  if (!isUtf16WithBom(buffer) && looksBinary(buffer)) {
     return { kind: "binary", size: info.size };
   }
-  return { kind: "text", content: buffer.toString("utf8"), size: info.size };
+  return { kind: "text", content: decodePreviewText(buffer), size: info.size };
 }
 
 export async function readWorkspaceFile(

@@ -1003,3 +1003,155 @@
 
 .review-history.is-nowrap .review-change-diff .diff-line { min-width: max-content; }
 .review-history.is-nowrap .diff-line-text { white-space: pre; overflow-wrap: normal; }
+
+
+/* ── Preview: find bar ─────────────────────────────────────────────────────
+   Matches are painted through the CSS Custom Highlight API, so the mark
+   styling lives on pseudo-elements instead of the DOM. */
+.file-viewer-find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.file-viewer-find input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: var(--text-xs-plus);
+  outline: none;
+}
+
+.file-viewer-find input:focus {
+  border-color: var(--accent);
+}
+
+.file-viewer-find-count {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.file-viewer-find button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.file-viewer-find button:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+::highlight(pi-preview-find) {
+  background-color: rgba(255, 213, 79, 0.35);
+  color: inherit;
+}
+
+::highlight(pi-preview-find-active) {
+  background-color: rgba(255, 152, 0, 0.8);
+  color: #1a1200;
+}
+
+/* ── Preview: HTML, CSV/TSV, mode toggle ──────────────────────────────── */
+.file-viewer-mode {
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.file-viewer-mode:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.file-viewer-html {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.file-viewer-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+
+.file-viewer-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs-plus);
+  width: max-content;
+  min-width: 100%;
+}
+
+.file-viewer-table th,
+.file-viewer-table td {
+  max-width: 320px;
+  padding: 3px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.file-viewer-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.file-viewer-table tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+.file-viewer-table-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  color: var(--faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.file-viewer-table-note {
+  margin: 8px 12px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
