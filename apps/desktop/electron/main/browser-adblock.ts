@@ -442,11 +442,28 @@ export function adblockCosmeticSelectors(rules: AdblockRuleSet, pageHost: string
   return [...hidden];
 }
 
-/** CSS that hides the cosmetic matches for one page. */
+/**
+ * CSS that hides the cosmetic matches for one page.
+ *
+ * The nodes are **cloaked**, not removed: a 1×1 off-screen box keeps
+ * `offsetHeight` and `display` answers intact, so a page that plants a bait
+ * element and checks whether it still has a size does not conclude that an
+ * ad blocker is installed and wall the content off. `display: none` reads as
+ * "blocked" to every detector; this does not.
+ */
 export function adblockCosmeticCss(rules: AdblockRuleSet, pageHost: string): string {
   const selectors = adblockCosmeticSelectors(rules, pageHost);
   if (!selectors.length) return "";
-  return `${selectors.join(",\n")} { display: none !important; }`;
+  return `${selectors.join(",\n")} {
+  position: absolute !important;
+  left: -10000px !important;
+  top: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}`;
 }
 
 type AdblockState = { enabled: boolean };

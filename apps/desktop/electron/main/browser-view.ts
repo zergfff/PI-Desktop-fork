@@ -20,6 +20,7 @@ import {
 } from "./browser-adblock";
 import { desktopDataDir } from "./data-paths";
 import { activeDownloadsDir, downloadRegistry } from "./browser-downloads";
+import { BROWSER_CLOAK_SCRIPT, browserUserAgent } from "./browser-cloak";
 
 /**
  * Work panel embedded preview browser (D100, ADR 0019).
@@ -58,6 +59,30 @@ function reloadAdblockRules(): AdblockRuleSet {
 }
 
 /** Where the pane drops downloaded files; the OS default, not a private folder. */
+/**
+ * Present the pane as ordinary Chrome.
+ *
+ * Electron's default user agent advertises `PI-Desktop/… Electron/43.6.0`, and
+ * sites that gate on it answer with a challenge or a 403. The header is rewritten
+ * too, because some gates read it instead of the JS property.
+ */
+const userAgentSessions = new WeakSet<object>();
+
+function ensurePlainUserAgent(session: Electron.Session): void {
+  if (userAgentSessions.has(session)) return;
+  userAgentSessions.add(session);
+  const agent = browserUserAgent();
+  session.setUserAgent(agent);
+  session.webRequest.onBeforeSendHeaders(
+    { urls: ["http://*/*", "https://*/*"] },
+    (details, callback) => {
+      callback({
+        requestHeaders: { ...details.requestHeaders, "User-Agent": agent },
+      });
+    },
+  );
+}
+
 function ensureAdblock(session: Electron.Session): void {
   if (adblockSessions.has(session)) return;
   adblockSessions.add(session);
@@ -683,6 +708,9 @@ export class BrowserPane {
         return "";
       }
     })();
+    // Seed the detector baits alongside the cosmetics: a wall appears when the
+    // page's own bait collapses, so the bait has to survive our hiding.
+    void wc.executeJavaScript(BROWSER_CLOAK_SCRIPT, true).catch(() => undefined);
     const css = adblockCosmeticCss(adblockRules ?? reloadAdblockRules(), pageHost);
     if (!css) return;
     void wc
@@ -909,6 +937,7 @@ export class BrowserPane {
     surface.setBounds(this.bounds);
     this.surface = surface;
     const wc = view.webContents;
+    ensurePlainUserAgent(wc.session);
     ensureAdblock(wc.session);
     downloadRegistry.attach(wc.session);
     downloadRegistry.setWindowProvider(() => this.window ?? BrowserWindow.getFocusedWindow());
