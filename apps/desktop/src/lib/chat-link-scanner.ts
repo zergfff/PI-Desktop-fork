@@ -143,12 +143,33 @@ function startsHttpUrl(text: string, index: number): boolean {
   return text.slice(index + offset, index + offset + 3) === "://";
 }
 
+/**
+ * Where a bare URL ends.
+ *
+ * Chinese prose runs straight on from a URL — `https://www.bbc.com/news）当前头条`
+ * has no space after the link — so the ASCII delimiters alone let the whole
+ * sentence become the href, and the browser then requests
+ * `/news%EF%BC%89%E5%BD%93...`. Fullwidth and CJK punctuation therefore terminate a
+ * URL just like a space does. Ideographs do **not** terminate it: a raw CJK path
+ * (`…/wiki/中文`) is a legitimate URL, and it is always preceded by an ASCII
+ * segment, so the punctuation rule covers the prose case without breaking that one.
+ */
 function urlBreak(code: number): boolean {
-  return (
+  if (
     isWhitespace(code) || code === 0x3c || code === 0x3e || code === 0x22 ||
     code === 0x27 || code === 0x5b || code === 0x5d || code === 0x7b ||
     code === 0x7d
-  );
+  ) {
+    return true;
+  }
+  return isCjkPunctuation(code);
+}
+
+/** Fullwidth forms (U+FF00–FF65) and CJK punctuation blocks (U+3000–303F, U+2018–201D, U+2026). */
+function isCjkPunctuation(code: number): boolean {
+  if (code >= 0x3000 && code <= 0x303f) return true;
+  if (code >= 0xff00 && code <= 0xff65) return true;
+  return code === 0x2018 || code === 0x2019 || code === 0x201c || code === 0x201d || code === 0x2026;
 }
 
 function trimUrlPunctuation(url: string): string {
@@ -157,8 +178,7 @@ function trimUrlPunctuation(url: string): string {
     const code = url.charCodeAt(end - 1);
     if (
       code === 0x2e || code === 0x2c || code === 0x21 || code === 0x3f ||
-      code === 0x3b || code === 0x3a || code === 0xff0c || code === 0x3002 ||
-      code === 0xff01 || code === 0xff1f || code === 0xff1b || code === 0xff1a
+      code === 0x3b || code === 0x3a || isCjkPunctuation(code)
     ) {
       end -= 1;
     } else {

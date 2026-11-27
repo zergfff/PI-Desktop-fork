@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+// CJK prose runs straight on from a URL; the link must stop at the punctuation.
 import test from "node:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -971,6 +972,22 @@ test("resolvePreviewTarget carries line/col on file chips (#681)", () => {
     line: 42,
     column: 7,
   });
+});
+
+test("a URL followed by fullwidth punctuation stops at the punctuation", () => {
+  const segments = splitChatText("抓取 https://www.bbc.com/news）当前头条，共 36 条", ROOT);
+  const urls = segments
+    .filter((segment) => segment.kind === "target" && segment.target.kind === "url")
+    .map((segment) => segment.target.url);
+  assert.deepEqual(urls, ["https://www.bbc.com/news"]);
+});
+
+test("a raw CJK path in a URL survives", () => {
+  const segments = splitChatText("见 https://zh.wikipedia.org/wiki/中文 条目", ROOT);
+  const urls = segments
+    .filter((segment) => segment.kind === "target" && segment.target.kind === "url")
+    .map((segment) => segment.target.url);
+  assert.deepEqual(urls, ["https://zh.wikipedia.org/wiki/中文"]);
 });
 
 test("session links segment as their own target", () => {
