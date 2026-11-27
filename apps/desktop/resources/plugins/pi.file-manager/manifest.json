@@ -35,6 +35,16 @@
         "icon": "folder",
         "entry": "views/index.html",
         "order": 40
+      },
+      {
+        "id": "preview",
+        "title": {
+          "en": "File Preview",
+          "zh-CN": "文件预览"
+        },
+        "icon": "files",
+        "entry": "views/index.html",
+        "order": 41
       }
     ]
   },

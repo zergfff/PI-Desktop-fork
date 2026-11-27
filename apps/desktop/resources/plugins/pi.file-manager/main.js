@@ -43,6 +43,7 @@ const fs = require("node:fs/promises");
 const zlib = require("node:zlib");
 const path = require("node:path");
 const { isRemoteWorkspace, invokeRemote } = require("./remote-workspace.js");
+const { appendAnnotations, writeFileAtomicBytes } = require("./pdf-annotate.js");
 
 // ── 上限 ────────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,8 @@ const MAX_XLSX_TEXT_CHARS = 2 * 1024 * 1024;
 /** 这些扩展名是工作簿容器：读出来的是派生文本，写回只会毁掉文件。 */
 const WORKBOOK_EXT = /^\.(?:xlsx|xlsm|xltx|xltm)$/;
 const MAX_WRITE_BYTES = 8 * 1024 * 1024;
+/** 写回注释要把整份 PDF 读进内存并重写一遍，给个比普通写入宽松但仍有上限的门槛。 */
+const MAX_PDF_ANNOTATE_BYTES = 200 * 1024 * 1024;
 const MAX_LIST_ENTRIES = 3000;
 /** prefs.projectRoots 最多记多少个项目；超出按最久没用过的淘汰。 */
 const MAX_PROJECT_ROOTS = 20;
@@ -2460,6 +2463,39 @@ function launchEditor(command, target) {
   child.unref();
 }
 
+/**
+ * 把高亮 / 下划线 / 删除线写回 PDF。
+ *
+ * pdf.js 只会渲染 PDF 里**已有**的注释，所以只存在视图里的高亮刷新一次就没了。这里把
+ * 标准注释对象（/Highlight / /Underline / /StrikeOut）追加到页面的 /Annots 上，别的
+ * 阅读器也看得见。坐标由视图按页面宽高归一化（左上原点），换算成 PDF 用户空间
+ * （左下原点、点为单位）在 pdf-annotate.js 里做一次。
+ */
+async function handlePdfAnnotate(payload) {
+  const relPath = typeof payload?.path === "string" ? payload.path : "";
+  const ops = Array.isArray(payload?.ops) ? payload.ops.slice(0, 200) : [];
+  if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
+  if (ops.length === 0) throw fail("INVALID_ARGUMENT", "ops is required");
+
+  const { abs, rel } = await resolveInsideRoot(relPath, { mode: "write" });
+  if (!/\.pdf$/i.test(abs)) throw fail("INVALID_PATH", "annotations are only supported for PDFs");
+
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw fail("NOT_FOUND", "the file is gone");
+  if (stat.size > MAX_PDF_ANNOTATE_BYTES) throw fail("TOO_LARGE", "this PDF is too large to rewrite");
+
+  const before = await fs.readFile(abs);
+  const result = await appendAnnotations(before, ops);
+  if (result.added === 0) {
+    return { ok: false, code: "NOTHING_TO_ADD", skipped: result.skipped };
+  }
+
+  await writeFileAtomicBytes(abs, result.bytes, stat.mode);
+  const after = await fs.stat(abs);
+  await audit({ action: "pdf.annotate", path: rel, added: result.added });
+  return { ok: true, added: result.added, skipped: result.skipped, size: after.size, mtimeMs: after.mtimeMs };
+}
+
 async function handleEditors() {
   const cache = await detectEditors();
   return {
@@ -3922,6 +3958,7 @@ const CHANNELS = {
   // 编辑器探测与「通过…打开」（0.9.0）。前者一天只真的探一次（落盘缓存，多开共享），
   // 后者只认探测结果里的 id，视图指定不了可执行文件。
   "fm.editors": handleEditors,
+  "fm.pdf.annotate": handlePdfAnnotate,
   "fm.openWith": handleOpenWith,
 };
 
