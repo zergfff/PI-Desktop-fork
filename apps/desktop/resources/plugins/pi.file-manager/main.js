@@ -44,6 +44,8 @@ const zlib = require("node:zlib");
 const path = require("node:path");
 const { isRemoteWorkspace, invokeRemote } = require("./remote-workspace.js");
 const { appendAnnotations, writeFileAtomicBytes } = require("./pdf-annotate.js");
+const { draftStore } = require("./pdf-drafts.js");
+const { OFFICE_EXTENSIONS, convertOfficeToPdf } = require("./office-convert.js");
 
 // ── 上限 ────────────────────────────────────────────────────────────────────
 
@@ -2471,6 +2473,67 @@ function launchEditor(command, target) {
  * 阅读器也看得见。坐标由视图按页面宽高归一化（左上原点），换算成 PDF 用户空间
  * （左下原点、点为单位）在 pdf-annotate.js 里做一次。
  */
+/** 标注草稿：记在插件数据目录，点「保存」才写进 PDF。 */
+let pdfDrafts = null;
+const pdfDraftStore = () => {
+  if (!pdfDrafts) pdfDrafts = draftStore(dataPath);
+  return pdfDrafts;
+};
+
+async function handlePdfDraft(payload) {
+  const relPath = typeof payload?.path === "string" ? payload.path : "";
+  if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
+  const { abs } = await resolveInsideRoot(relPath, { mode: "read" });
+  const ops = await pdfDraftStore().read(abs);
+  return { ok: true, ops };
+}
+
+async function handlePdfStage(payload) {
+  const relPath = typeof payload?.path === "string" ? payload.path : "";
+  const ops = Array.isArray(payload?.ops) ? payload.ops.slice(0, 100) : [];
+  if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
+  if (ops.length === 0) throw fail("INVALID_ARGUMENT", "ops is required");
+  const { abs, rel } = await resolveInsideRoot(relPath, { mode: "write" });
+  if (!/\.pdf$/i.test(abs)) throw fail("INVALID_PATH", "annotations are only supported for PDFs");
+  const merged = await pdfDraftStore().append(abs, ops);
+  await audit({ action: "pdf.draft", path: rel, added: ops.length, total: merged.length });
+  return { ok: true, count: merged.length, ops: merged };
+}
+
+async function handlePdfDiscard(payload) {
+  const relPath = typeof payload?.path === "string" ? payload.path : "";
+  if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
+  const { abs } = await resolveInsideRoot(relPath, { mode: "read" });
+  await pdfDraftStore().clear(abs);
+  return { ok: true };
+}
+
+/** 把草稿合并进 PDF，然后删掉草稿。 */
+async function handlePdfCommit(payload) {
+  const relPath = typeof payload?.path === "string" ? payload.path : "";
+  if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
+  const { abs, rel } = await resolveInsideRoot(relPath, { mode: "write" });
+  if (!/\.pdf$/i.test(abs)) throw fail("INVALID_PATH", "annotations are only supported for PDFs");
+
+  const ops = await pdfDraftStore().read(abs);
+  if (ops.length === 0) return { ok: true, added: 0, skipped: [], empty: true };
+
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat) throw fail("NOT_FOUND", "the file is gone");
+  if (stat.size > MAX_PDF_ANNOTATE_BYTES) throw fail("TOO_LARGE", "this PDF is too large to rewrite");
+
+  const before = await fs.readFile(abs);
+  const result = await appendAnnotations(before, ops);
+  if (result.added === 0) {
+    return { ok: false, code: "NOTHING_TO_ADD", skipped: result.skipped };
+  }
+  await writeFileAtomicBytes(abs, result.bytes, stat.mode);
+  await pdfDraftStore().clear(abs);
+  const after = await fs.stat(abs);
+  await audit({ action: "pdf.commit", path: rel, added: result.added });
+  return { ok: true, added: result.added, skipped: result.skipped, size: after.size, mtimeMs: after.mtimeMs };
+}
+
 async function handlePdfAnnotate(payload) {
   const relPath = typeof payload?.path === "string" ? payload.path : "";
   const ops = Array.isArray(payload?.ops) ? payload.ops.slice(0, 200) : [];
@@ -2967,6 +3030,32 @@ async function handleRead(payload) {
       return { ok: true, kind: "tooLarge", limit: MAX_PDF_BYTES, ...base, size: buffer.length };
     }
     return { ok: true, kind: "pdf", mime: "application/pdf", dataUri: asDataUri("application/pdf", buffer), ...base };
+  }
+
+  // docx / pptx / xls：本机 Office 导成 PDF，再交给 PDF 预览器。转换慢，按
+  // 路径+mtime+大小 缓存；转不出来就继续走下面的二进制分支，界面会提示用默认应用打开。
+  if (OFFICE_EXTENSIONS.has(extension)) {
+    const converted = await convertOfficeToPdf({
+      abs,
+      stat,
+      dataPath,
+      scriptPath: path.join(__dirname, "office-to-pdf.ps1"),
+    }).catch(() => null);
+    if (converted) {
+      const pdfStat = await fs.stat(converted).catch(() => null);
+      if (pdfStat && pdfStat.size <= MAX_PDF_BYTES) {
+        const buffer = await fs.readFile(converted);
+        await audit({ action: "office.convert", path: abs, kind: extension, size: buffer.length });
+        return {
+          ok: true,
+          kind: "pdf",
+          mime: "application/pdf",
+          dataUri: asDataUri("application/pdf", buffer),
+          convertedFrom: extension,
+          ...base,
+        };
+      }
+    }
   }
 
   // 图片与音视频返回 data URI：视图在 file:// 下拿不到项目里的文件，
@@ -3959,6 +4048,10 @@ const CHANNELS = {
   // 后者只认探测结果里的 id，视图指定不了可执行文件。
   "fm.editors": handleEditors,
   "fm.pdf.annotate": handlePdfAnnotate,
+  "fm.pdf.draft": handlePdfDraft,
+  "fm.pdf.stage": handlePdfStage,
+  "fm.pdf.commit": handlePdfCommit,
+  "fm.pdf.discard": handlePdfDiscard,
   "fm.openWith": handleOpenWith,
 };
 

@@ -105,46 +105,23 @@
     true,
   );
 
-  // ── 选中文字 → 浮出标注工具 ────────────────────────────────────────────────
-  const bar = document.createElement("div");
-  bar.className = "pi-pdf-bar";
-  bar.hidden = true;
-  const actions = [
-    { kind: "highlight", label: "高亮" },
-    { kind: "underline", label: "下划线" },
-    { kind: "strike", label: "删除线" },
-  ];
-  for (const action of actions) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = action.label;
-    button.dataset.kind = action.kind;
-    bar.append(button);
-  }
-  const copyButton = document.createElement("button");
-  copyButton.type = "button";
-  copyButton.textContent = "复制";
-  copyButton.dataset.kind = "copy";
-  bar.append(copyButton);
-
-  let selectionRects = [];
-  const hideBar = () => {
-    bar.hidden = true;
-    selectionRects = [];
-  };
-
-  /** 把 DOM 选区按页拆成「页面归一化矩形」，PDF 用户空间换算留给宿主。 */
+  // ── 选区 → 页面归一化矩形 ─────────────────────────────────────────────────
+  /**
+   * 把 DOM 选区按页拆成「页面归一化矩形」，PDF 用户空间换算留给宿主。
+   * 只在真正要记一条标注时调用。
+   */
   const collectSelection = () => {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
     const range = selection.getRangeAt(0);
-    if (!document.querySelector(".pdf-stage") || !document.querySelector(".pdf-stage").contains(range.commonAncestorContainer)) {
-      return null;
-    }
+    const stage = document.querySelector(".pdf-stage");
+    if (!stage || !stage.contains(range.commonAncestorContainer)) return null;
     const byPage = new Map();
     for (const rect of Array.from(range.getClientRects())) {
       if (rect.width < 1 || rect.height < 1) continue;
-      const page = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)?.closest(".page");
+      const page = document
+        .elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        ?.closest(".page");
       if (!page) continue;
       const box = page.getBoundingClientRect();
       if (box.width < 1 || box.height < 1) continue;
@@ -162,69 +139,242 @@
     return { byPage, text: selection.toString().slice(0, 2000) };
   };
 
-  document.addEventListener("mouseup", (event) => {
-    if (!isPreview) return;
-    if (bar.contains(event.target)) return;
-    window.setTimeout(() => {
-      const picked = collectSelection();
-      if (!picked) return hideBar();
-      selectionRects = [...picked.byPage.entries()].map(([page, rects]) => ({ page, rects }));
-      bar.dataset.text = picked.text;
-      const last = window.getSelection().getRangeAt(0).getBoundingClientRect();
-      bar.hidden = false;
-      bar.style.left = `${Math.max(8, Math.min(window.innerWidth - 260, last.left))}px`;
-      bar.style.top = `${Math.max(8, last.top - 44)}px`;
-    }, 10);
-  });
+  // ── 未保存的标注：先画在页面上，点保存才写进文件 ──────────────────────────
+  let pending = [];
 
-  document.addEventListener("mousedown", (event) => {
-    if (!bar.hidden && !bar.contains(event.target)) hideBar();
-  });
-
-  const reload = () => {
-    // 注释写进文件后重新载入，让 pdf.js 的注释层把新 Annotation 画出来。
-    window.location.reload();
+  const paint = () => {
+    for (const node of Array.from(document.querySelectorAll(".pi-annot"))) node.remove();
+    if (pending.length === 0) return;
+    for (const op of pending) {
+      const page = document.querySelector(`.page[data-page-number="${op.page}"]`);
+      if (!page) continue;
+      for (const rect of op.rects ?? []) {
+        const mark = document.createElement("div");
+        mark.className = "pi-annot";
+        mark.dataset.kind = op.kind;
+        mark.style.left = `${rect.x0 * 100}%`;
+        mark.style.top = `${rect.y0 * 100}%`;
+        mark.style.width = `${Math.max(0, rect.x1 - rect.x0) * 100}%`;
+        mark.style.height = `${Math.max(0, rect.y1 - rect.y0) * 100}%`;
+        page.append(mark);
+      }
+    }
   };
 
-  bar.addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-kind]");
-    if (!button) return;
-    const kind = button.dataset.kind;
-    if (kind === "copy") {
-      try {
-        await navigator.clipboard.writeText(bar.dataset.text || "");
-      } catch {
-        /* clipboard refused: the selection is still there to copy by hand */
-      }
-      hideBar();
-      return;
-    }
-    if (!currentPath) {
-      button.textContent = "先打开文件";
-      return;
-    }
-    const ops = selectionRects.map((entry) => ({
-      page: entry.page,
-      kind,
-      rects: entry.rects,
-      text: bar.dataset.text || "",
-    }));
-    button.disabled = true;
+  const bar = document.createElement("div");
+  bar.className = "pi-pdf-save";
+  bar.hidden = true;
+  const barCount = document.createElement("span");
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.textContent = "保存";
+  const discardButton = document.createElement("button");
+  discardButton.type = "button";
+  discardButton.textContent = "放弃";
+  bar.append(barCount, saveButton, discardButton);
+  document.body.append(bar);
+
+  const syncBar = () => {
+    const count = pending.reduce((total, op) => total + (op.rects?.length ?? 0), 0);
+    bar.hidden = count === 0;
+    barCount.textContent = count === 0 ? "" : `未保存 ${count} 处标注`;
+  };
+
+  const setPending = (ops) => {
+    pending = Array.isArray(ops) ? ops : [];
+    paint();
+    syncBar();
+  };
+
+  const reload = () => window.location.reload();
+
+  saveButton.addEventListener("click", async () => {
+    if (!currentPath || pending.length === 0) return;
+    saveButton.disabled = true;
+    saveButton.textContent = "保存中…";
     try {
-      const result = await bridge.invoke("fm.pdf.annotate", { path: currentPath, ops });
-      if (result && result.ok) reload();
-      else button.textContent = "未写入";
-    } catch (error) {
-      button.textContent = "写入失败";
+      const result = await bridge.invoke("fm.pdf.commit", { path: currentPath });
+      if (result && result.ok) {
+        pending = [];
+        reload();
+        return;
+      }
+      saveButton.textContent = "保存失败";
+    } catch {
+      saveButton.textContent = "保存失败";
     } finally {
-      button.disabled = false;
+      saveButton.disabled = false;
+      window.setTimeout(() => {
+        saveButton.textContent = "保存";
+      }, 1500);
     }
   });
 
+  discardButton.addEventListener("click", async () => {
+    if (!currentPath) return;
+    try {
+      await bridge.invoke("fm.pdf.discard", { path: currentPath });
+    } catch {
+      /* 草稿删不掉也不该拦住界面 */
+    }
+    setPending([]);
+  });
+
+  // 页面重绘（缩放、翻页）会丢掉叠加层，重画一次；节流免得滚动时抖动。
+  let paintTimer = 0;
+  const repaint = () => {
+    if (!isPreview) return;
+    window.clearTimeout(paintTimer);
+    paintTimer = window.setTimeout(() => {
+      paint();
+      ensureNavHandle();
+      syncOpenDefault();
+    }, 120);
+  };
+  const scroller = document.querySelector(".pdf-scroll") ?? document.body;
+  scroller.addEventListener("scroll", repaint, { passive: true });
+  window.addEventListener("resize", repaint);
+  new MutationObserver(repaint).observe(document.body, { childList: true, subtree: true });
+
+  // 直接关标签/刷新时宿主不会问插件，这里至少拦住"页面被替换"这条路径。
+  window.addEventListener("beforeunload", (event) => {
+    if (pending.length === 0) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+
+  // 打开时把草稿读回来：上次没保存的标注还画在页面上。
+  if (isPreview && currentPath) {
+    bridge
+      .invoke("fm.pdf.draft", { path: currentPath })
+      .then((result) => {
+        if (result && Array.isArray(result.ops)) setPending(result.ops);
+      })
+      .catch(() => {});
+  }
+
+  // ── Ctrl + 滚轮缩放（所有预览类型）─────────────────────────────────────────
+  let zoomFactor = 1;
+  document.addEventListener(
+    "wheel",
+    (event) => {
+      if (!isPreview || !(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      const zoom = document.querySelector(".pdf-zoom");
+      if (zoom) {
+        // PDF：交给查看器自己的缩放，页面尺寸、文本层和注释层才会一起变。
+        const buttons = Array.from(zoom.querySelectorAll("button"));
+        const minus = buttons.find((b) => /^[−\-]$/.test((b.textContent || "").trim()));
+        const plus = buttons.find((b) => /^[+＋]$/.test((b.textContent || "").trim()));
+        const target = event.deltaY < 0 ? plus : minus;
+        if (target) target.click();
+        return;
+      }
+      // 其它预览（文本 / 图片 / 表格 / 转换后的 Office）：整块内容缩放即可。
+      const host = document.querySelector(".pi-zoom-host") ?? document.querySelector("#root > div");
+      if (!host) return;
+      zoomFactor = Math.min(3, Math.max(0.5, zoomFactor * (event.deltaY < 0 ? 1.1 : 1 / 1.1)));
+      host.style.zoom = zoomFactor === 1 ? "" : String(Number(zoomFactor.toFixed(3)));
+    },
+    { passive: false, capture: true },
+  );
+
+  // ── 预览不了的文件：用本机默认应用打开 ─────────────────────────────────────
+  const PREVIEWABLE = /\.(pdf|txt|md|markdown|json|jsonc|csv|tsv|log|yml|yaml|toml|ini|conf|js|mjs|cjs|ts|tsx|jsx|css|scss|html|htm|xml|sql|py|rs|go|java|c|h|cpp|sh|bat|ps1|png|jpe?g|gif|webp|bmp|ico|avif|svg|mp4|webm|mov|mkv|mp3|wav|m4a|ogg|flac|aac|xlsx|xls|csv|sqlite|db)$/i;
+
+  const openDefault = document.createElement("button");
+  openDefault.type = "button";
+  openDefault.className = "pi-open-default";
+  openDefault.textContent = "用默认应用打开";
+  openDefault.hidden = true;
+  openDefault.addEventListener("click", () => {
+    if (!currentPath) return;
+    openDefault.disabled = true;
+    bridge
+      .invoke("fs.openDefault", { path: currentPath })
+      .catch(() => {})
+      .finally(() => {
+        openDefault.disabled = false;
+      });
+  });
+  document.body.append(openDefault);
+
+  const syncOpenDefault = () => {
+    if (!isPreview) {
+      openDefault.hidden = true;
+      return;
+    }
+    const name = (currentPath.split(/[\\/]/).pop() || "").toLowerCase();
+    // 转换中的 Office / PDF 一旦拿到 PDF 预览就不再提示；这里只看扩展名，
+    // 因为转换失败时界面确实只剩「打开方式」这一条路。
+    const converting = /\.(docx?|pptx?|xlsx?|odt|rtf)$/i.test(name) && Boolean(document.querySelector(".pdf-stage"));
+    openDefault.hidden = !name || PREVIEWABLE.test(name) || converting;
+  };
+
+  // ── 工具栏「导航」块的宽度可拖 ─────────────────────────────────────────────
+  // 页码块默认按内容撑开（194px），窄面板下把缩放挤出去。给它一条分隔条，宽度记在
+  // localStorage 里，下次打开还是这个宽度。
+  const NAV_WIDTH_KEY = "pi.fm.pdfNavWidth";
+  const NAV_MIN = 84;
+  const NAV_MAX = 320;
+
+  const applyNavWidth = (toolbar, width) => {
+    toolbar.style.setProperty("--pi-pdf-nav-w", `${Math.round(width)}px`);
+  };
+
+  const ensureNavHandle = () => {
+    if (!isPreview) return;
+    const toolbar = document.querySelector(".pdf-toolbar");
+    const nav = toolbar?.querySelector(".pdf-navigation");
+    if (!toolbar || !nav) return;
+    let saved = 0;
+    try {
+      saved = Number(window.localStorage.getItem(NAV_WIDTH_KEY)) || 0;
+    } catch {
+      saved = 0;
+    }
+    if (saved >= NAV_MIN) applyNavWidth(toolbar, Math.min(saved, NAV_MAX));
+
+    if (toolbar.querySelector(".pi-pdf-nav-resize")) return;
+    const handle = document.createElement("div");
+    handle.className = "pi-pdf-nav-resize";
+    handle.title = "拖动调整导航宽度";
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = nav.getBoundingClientRect().width;
+      handle.setPointerCapture(event.pointerId);
+      const move = (moveEvent) => {
+        const width = Math.min(NAV_MAX, Math.max(NAV_MIN, startWidth + (moveEvent.clientX - startX)));
+        applyNavWidth(toolbar, width);
+      };
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.classList.remove("pi-dragging");
+        try {
+          window.localStorage.setItem(
+            NAV_WIDTH_KEY,
+            String(Math.round(nav.getBoundingClientRect().width)),
+          );
+        } catch {
+          /* 记不住就只影响下次打开 */
+        }
+      };
+      handle.classList.add("pi-dragging");
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+    });
+    nav.after(handle);
+  };
+
   // ── PDF 右键菜单 ───────────────────────────────────────────────────────────
+  // 只在右键时出现；选中文字才多出三个标注项。不做「选中就浮出工具条」——
+  // 那是选区自己的交互，多一个浮层只会挡住正文。
   const menu = document.createElement("div");
   menu.className = "pi-pdf-menu";
   menu.hidden = true;
+  document.body.append(menu);
 
   const menuItems = () => {
     const picked = collectSelection();
@@ -233,35 +383,57 @@
       { id: "print", label: "打印…" },
       { id: "find", label: "查找…" },
     ];
-    if (picked) items.push({ id: "highlight", label: "高亮" }, { id: "underline", label: "下划线" }, { id: "strike", label: "删除线" });
+    if (picked) {
+      items.push(
+        { id: "highlight", label: "高亮" },
+        { id: "underline", label: "下划线" },
+        { id: "strike", label: "删除线" },
+      );
+    }
     return items;
   };
 
-  const openMenu = (event) => {
-    const stage = event.target.closest && event.target.closest(".pdf-stage");
-    if (!stage) return;
-    event.preventDefault();
-    menu.replaceChildren();
-    for (const item of menuItems()) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = item.label;
-      button.dataset.id = item.id;
-      menu.append(button);
-    }
-    menu.hidden = false;
-    menu.style.left = `${Math.min(event.clientX, window.innerWidth - 180)}px`;
-    menu.style.top = `${Math.min(event.clientY, window.innerHeight - 200)}px`;
-  };
-  document.addEventListener("contextmenu", openMenu);
+  // capture 阶段：查看器自己也监听 contextmenu，冒泡阶段可能轮不到我们。
+  document.addEventListener(
+    "contextmenu",
+    (event) => {
+      if (!isPreview) return;
+      const stage = event.target && event.target.closest ? event.target.closest(".pdf-stage") : null;
+      if (!stage) return;
+      event.preventDefault();
+      event.stopPropagation();
+      menu.replaceChildren();
+      for (const item of menuItems()) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = item.label;
+        button.dataset.id = item.id;
+        menu.append(button);
+      }
+      menu.hidden = false;
+      menu.style.left = `${Math.min(event.clientX, window.innerWidth - 180)}px`;
+      menu.style.top = `${Math.min(event.clientY, window.innerHeight - 200)}px`;
+    },
+    true,
+  );
 
-  document.addEventListener("mousedown", (event) => {
-    if (!menu.hidden && !menu.contains(event.target)) menu.hidden = true;
-  });
+  // 点菜单外面才收起来；点在菜单里什么都不做，否则收起后这一下会落到下面的
+  // 文件树上（表现为「点高亮却打开了某个 .lnk」）。
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      if (menu.hidden) return;
+      if (event.composedPath().includes(menu)) return;
+      menu.hidden = true;
+    },
+    true,
+  );
 
   menu.addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-id]");
     if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
     const id = button.dataset.id;
     menu.hidden = true;
     if (id === "copy") {
@@ -285,19 +457,26 @@
       if (input) input.focus();
       return;
     }
-    // 选区还在：标完再收起菜单
+    // 标注：只记草稿，不动文件。
     const picked = collectSelection();
     if (!picked || !currentPath) return;
-    const ops = [...picked.byPage.entries()].map(([page, rects]) => ({ page, kind: id, rects, text: picked.text }));
+    const ops = [...picked.byPage.entries()].map(([page, rects]) => ({
+      page,
+      kind: id,
+      rects,
+      text: picked.text,
+    }));
     try {
-      const result = await bridge.invoke("fm.pdf.annotate", { path: currentPath, ops });
-      if (result && result.ok) reload();
+      const result = await bridge.invoke("fm.pdf.stage", { path: currentPath, ops });
+      if (result && Array.isArray(result.ops)) setPending(result.ops);
     } catch {
-      /* surfacing the failure in a menu that is already gone helps nobody */
+      /* 记不下来就什么都不改，文件至少没被动过 */
     }
   });
 
-  document.body.append(bar, menu);
-  // 打开时就清一次：上一个会话可能留下了几个 PDF 内部标签。
-  window.setTimeout(prunePdfTabs, 2500);
+  window.setTimeout(() => {
+    ensureNavHandle();
+    syncOpenDefault();
+    prunePdfTabs();
+  }, 1200);
 })();
