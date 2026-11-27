@@ -32,10 +32,40 @@
     if (!currentPath) currentPath = window.localStorage.getItem(PATH_KEY) || "";
     bridge.on("view:open", (payload) => {
       if (payload && typeof payload.path === "string" && payload.path) currentPath = payload.path;
+      window.setTimeout(prunePdfTabs, 1200);
     });
   } catch {
     /* older hosts push nothing; the deep link already covers the first open */
   }
+
+  /**
+   * 预览标签里每换一次文件，插件就多留一个内部文档标签。文档标签条被 CSS 藏起来了，
+   * 但那份 pdf.js 文档还在内存里，所以这里把**非当前**的 PDF 内部标签顺手关掉；
+   * 文本类标签不动 —— 它们可能有未保存的草稿，关掉会弹确认框。
+   */
+  let closing = false;
+  const prunePdfTabs = () => {
+    if (closing || !isPreview) return;
+    const strip = document.querySelector(".fm-document-tabs");
+    if (!strip) return;
+    const tabs = Array.from(strip.querySelectorAll(".fm-file-tab"));
+    if (tabs.length < 2) return;
+    // 活动标记在包一层的 div 上（data-active），而不是内部 button 的 aria-selected
+    const isActive = (tab) =>
+      tab.getAttribute("data-active") === "true" ||
+      tab.querySelector('[role="tab"][aria-selected="true"]') !== null;
+    const stale = tabs.filter((tab) => {
+      const name = (tab.querySelector(".fm-tab-name")?.textContent || "").trim();
+      return !isActive(tab) && /\.pdf$/i.test(name);
+    });
+    // 兜底：剩不到一个活动标签时什么都不关，宁可多留也不要把预览关空
+    if (stale.length === 0 || stale.length >= tabs.length) return;
+    closing = true;
+    for (const tab of stale) tab.querySelector(".fm-tab-close")?.click();
+    window.setTimeout(() => {
+      closing = false;
+    }, 400);
+  };
 
   // ── 树：单击文件 → 在 preview 标签里打开 ────────────────────────────────────
   document.addEventListener(
@@ -268,4 +298,6 @@
   });
 
   document.body.append(bar, menu);
+  // 打开时就清一次：上一个会话可能留下了几个 PDF 内部标签。
+  window.setTimeout(prunePdfTabs, 2500);
 })();

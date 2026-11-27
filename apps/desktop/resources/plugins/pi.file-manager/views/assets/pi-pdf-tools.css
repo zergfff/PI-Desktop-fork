@@ -33,6 +33,14 @@ html.pi-preview-only aside {
   display: none !important;
 }
 
+/*
+ * 预览标签里插件自己的文档标签条是多余的：外层的「文件预览」标签已经写明了文件，
+ * 里面再叠一排同名标签只让人以为有没关掉的东西。关掉它，文件名仍在内容头部。
+ */
+html.pi-preview-only .fm-document-tabs {
+  display: none !important;
+}
+
 /* ── 选中文字后的标注工具条 ─────────────────────────────────────────────── */
 .pi-pdf-bar {
   position: fixed;
