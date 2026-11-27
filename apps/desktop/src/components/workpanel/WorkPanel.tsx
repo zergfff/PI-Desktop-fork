@@ -43,7 +43,6 @@ import {
   IconBot,
   IconClose,
   IconDiff,
-  IconFolder,
   IconFileText,
   IconPanelMaximize,
   IconPanelRestore,
@@ -143,19 +142,6 @@ function workPanelTools(
       label: t("panel.tabs.review"),
       icon: IconDiff,
     },
-    // A dedicated file-tree entry: the same tree the file manager renders, one
-    // click from the launcher, and absent when that plugin is not loaded.
-    ...(() => {
-      const tree = pluginViews.find((view) => view.ref === "pi.file-manager/manager");
-      if (!tree) return [];
-      return [{
-        id: "file-tree",
-        tab: pluginWorkPanelTab(tree.pluginId, tree.viewId),
-        label: t("panel.tabs.file"),
-        icon: IconFolder,
-        description: tree.pluginName,
-      }];
-    })(),
     ...pluginViews.map((view) => {
       const Icon = pluginViewIcon(view.icon);
       return {
