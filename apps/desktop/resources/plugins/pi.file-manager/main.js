@@ -2572,7 +2572,11 @@ async function handleSetRoot(payload) {
   if (!stat.isDirectory()) throw fail("INVALID_PATH", "not a folder");
   if (isDenied("", "read")) throw fail("DENIED_PATH", "refused path");
 
-  prefs = { ...prefs, rootPath: target };
+  // 回到主目录就等于回到默认：不把 `C:\Users\<这个人>` 写进设置，否则换台机器
+  // 用户名不同就落到一个不存在的路径上。默认根永远由 os.homedir() 现算。
+  const home = require("node:os").homedir();
+  const isHome = home && path.resolve(target).toLowerCase() === path.resolve(home).toLowerCase();
+  prefs = { ...prefs, rootPath: isHome ? null : target };
   try {
     await pi.plugin.setSettings({ fmPrefs: prefs });
   } catch {

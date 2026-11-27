@@ -266,7 +266,7 @@
     const input = document.createElement("input");
     input.type = "text";
     input.spellcheck = false;
-    input.placeholder = "输入路径，如 C: 或 C:\\Users\\ASUS\\Documents";
+        input.placeholder = "输入路径，如 C: 或 D:" + String.fromCharCode(92) + "某个目录";
     const go = document.createElement("button");
     go.type = "submit";
     go.textContent = "前往";
