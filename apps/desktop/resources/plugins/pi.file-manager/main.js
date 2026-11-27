@@ -234,8 +234,29 @@ async function exists(target) {
  * 主根；现在多根时它是「当前选中的那个」。视图需要的组身份不在这里，见下面
  * projectGroup()：两者刻意分开，免得视图把「基点」当成「组的身份」来记忆。
  */
+/**
+ * 宿主工作区；没有打开项目时退化成用户主目录。
+ *
+ * 面板首先是文件浏览器：以前没有项目就只显示「尚未打开项目」，等于死路。现在没有项目时
+ * 直接浏览主目录，并且**所有通道共用这一个形状**，视图不会在 hello 与 list 之间看到
+ * 「工作区已切换」（那会触发 WORKSPACE_CHANGED，树直接空掉）。
+ */
+async function workspaceOrHome() {
+  let workspace = null;
+  try {
+    workspace = await pi.workspace.get();
+  } catch {
+    workspace = null;
+  }
+  if (workspace?.path) return workspace;
+  const home = require("node:os").homedir();
+  if (!home) return null;
+  const name = path.basename(home) || home;
+  return { path: home, name, projectId: `home:${home}`, roots: [{ path: home, name, primary: true }] };
+}
+
 async function currentRoot() {
-  const workspace = await pi.workspace.get();
+  const workspace = await workspaceOrHome();
   if (!workspace?.path) return null;
   if (isRemoteWorkspace(workspace)) throw fail("REMOTE_UNSUPPORTED", "Remote files must use the Host read gateway");
   return rootPayload(workspace, selectedRootOf(workspace));
@@ -247,7 +268,7 @@ async function currentRoot() {
  * 一共有哪些 folder」，当前看的是哪个由 prefs.projectRoots 推导。
  */
 async function projectGroup() {
-  const workspace = await pi.workspace.get();
+  const workspace = await workspaceOrHome();
   if (!workspace?.path) return null;
   return rootPayload(workspace, primaryRootOf(rootsOf(workspace)));
 }
@@ -410,7 +431,7 @@ async function resolveTarget(payload, mode) {
  * 项目外路径，那条路仍归 resolveExternal 管。
  */
 async function resolveGroupAbsolute(rawPath, mode) {
-  const workspace = await pi.workspace.get();
+  const workspace = await workspaceOrHome();
   if (!workspace?.path) throw fail("NO_WORKSPACE", "no project is open");
 
   const abs = path.resolve(rawPath);
@@ -1371,7 +1392,7 @@ const staleGit = () => fail("GIT_STALE", "The project, branch or index changed. 
 const unsafeIndex = () => fail("GIT_INDEX_BLOCKED", "The index contains a protected path, link, submodule or conflict. Review and unstage it in Git first.");
 
 async function gitContext(payload) {
-  const ws = await pi.workspace.get();
+  const ws = await workspaceOrHome();
   gitViewEpoch ||= gitEpoch();
   if (!ws?.path || isRemoteWorkspace(ws) || payload.external || payload.workspacePath !== ws.path ||
       (payload.projectId || null) !== (ws.projectId || null) || payload.rootPath !== selectedRootOf(ws).path) throw staleGit();
@@ -3835,7 +3856,7 @@ async function handlePrefsSet(payload) {
   let key = null;
   let previous;
   if (touchesRoots) {
-    const workspace = await pi.workspace.get().catch(() => null);
+    const workspace = await workspaceOrHome();
     key = workspace?.path ? projectKeyOf(workspace) : null;
     if (key) previous = (prefs.projectRoots ?? {})[key];
   }
@@ -3908,7 +3929,7 @@ async function onPanelInvoke(channel, payload) {
   const handler = CHANNELS[channel];
   if (!handler) return { ok: false, code: "UNSUPPORTED", message: `unknown channel: ${channel}` };
   try {
-    const workspace = await pi.workspace.get();
+    const workspace = await workspaceOrHome();
     if (channel === 'fm.write' && payload?.expectedRoot && (!workspace || !samePath(selectedRootOf(workspace)?.path ?? '', payload.expectedRoot))) {
       throw fail('WORKSPACE_CHANGED', 'The selected folder changed before this document could be saved.');
     }

@@ -123,40 +123,6 @@ import { desktopDataDir } from "./data-paths";
 import { McpServerClient, type McpServerClientOptions } from "./plugin-mcp";
 import { PluginToolInvocations, type PluginToolInvocation } from "./plugin-tool-invocations";
 import { pluginWorkspaceForCall, pluginWorkspacePath } from "./plugin-workspace-context";
-import { homedir } from "node:os";
-
-/**
- * With no project open, the file manager still has to browse somewhere.
- *
- * Its empty state asks the reader to create a project first, which is the wrong
- * answer for "show me my files": the panel falls back to the home folder, the way
- * a file manager opens where the user actually lives. Scoped to that plugin so no
- * other consumer starts treating the home directory as a workspace.
- */
-const HOME_FALLBACK_PLUGINS = new Set(["pi.file-manager"]);
-
-function homeFallbackRoot(pluginId: string): string | null {
-  return HOME_FALLBACK_PLUGINS.has(pluginId) ? homedir() : null;
-}
-
-function homeWorkspaceInfo(pluginId: string): {
-  path: string;
-  name: string;
-  projectId: string;
-  roots: Array<{ path: string; name: string; primary: boolean }>;
-} | null {
-  const root = homeFallbackRoot(pluginId);
-  if (!root) return null;
-  const name = root.split(/[\\/]/).filter(Boolean).at(-1) ?? root;
-  // Shaped like a single-folder project, because a file browser reads `roots` to
-  // render the tree: a bare `{path, name}` shows the root row and nothing under it.
-  return {
-    path: root,
-    name,
-    projectId: `home:${root}`,
-    roots: [{ path: root, name, primary: true }],
-  };
-}
 import { McpCallRegistry } from "./mcp-call-registry";
 import {
   RendererCallRelay,
@@ -2747,12 +2713,8 @@ export class PluginRuntime {
           (payload?.values as Record<string, number | string> | undefined) ?? {},
         );
         return { ok: true };
-      case "workspace.get": {
-        const info = await api.workspace.get();
-        // A file browser should still browse something when no project is open;
-        // its own empty state forces the reader to create a project first.
-        return info ?? homeWorkspaceInfo(loaded.manifest.id);
-      }
+      case "workspace.get":
+        return api.workspace.get();
       case "projects.list":
         return api.projects.list();
       case "models.list":
@@ -5355,7 +5317,7 @@ export class PluginRuntime {
   private fsRoot(loaded: LoadedPlugin, rule: PluginFsRule): string | null {
     if (rule.root === "userSelected") return loaded.userRoot ?? null;
     const sessionId = this.inFlightTool(loaded.manifest.id)?.sessionId.trim() || undefined;
-    return pluginWorkspacePath(this.services, sessionId) ?? homeFallbackRoot(loaded.manifest.id);
+    return pluginWorkspacePath(this.services, sessionId);
   }
 
   private remoteFsRead(loaded: LoadedPlugin, operation: "list" | "preview", ref: string, options?: PluginFsReadOptions) {
