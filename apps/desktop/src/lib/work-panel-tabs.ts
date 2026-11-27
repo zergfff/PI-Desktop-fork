@@ -178,6 +178,45 @@ export function browserPluginTabForReveal(
   return preferred ?? active ?? latest ?? browserPluginTab();
 }
 
+/**
+ * Views that open one tab per subject instead of one tab for the view.
+ *
+ * A plugin surface is keyed by (plugin, view), so two files can only sit in two
+ * tabs if they sit in two *views*. The file manager's preview therefore ships
+ * numbered slots and the host hands each subject the next free one: a subject
+ * already on screen focuses its own tab, and once every slot is taken the first is
+ * recycled rather than letting the strip grow without bound.
+ */
+const SUBJECT_SLOTS: Record<string, readonly string[]> = {
+  "pi.file-manager/preview": ["preview", "preview2", "preview3", "preview4"],
+};
+
+export function pluginSubjectTab(
+  pluginId: string,
+  viewId: string,
+  location: string | undefined,
+  openTabs: readonly WorkPanelTab[],
+): WorkPanelTab {
+  const subject = (location ?? "").trim();
+  const slots = SUBJECT_SLOTS[`${pluginId}/${viewId}`];
+  if (!slots || !subject) {
+    const base = pluginWorkPanelTab(pluginId, viewId);
+    return subject ? { ...base, location: subject } : base;
+  }
+  const label = subject.split(/[\\/]/).filter(Boolean).at(-1) || subject;
+  const existing = openTabs.find(
+    (tab) =>
+      tab.kind === "plugin" &&
+      tab.location === subject &&
+      slots.some((slot) => tab.resource === `${pluginId}/${slot}`),
+  );
+  if (existing) return { ...existing, label };
+  const free = slots.find(
+    (slot) => !openTabs.some((tab) => tab.kind === "plugin" && tab.resource === `${pluginId}/${slot}`),
+  );
+  return { ...pluginWorkPanelTab(pluginId, free ?? slots[0]), location: subject, label };
+}
+
 export function browserTabLabel(location: string): string {
   try { return new URL(location).host || location; } catch { return location.split(/[\\/]/).at(-1) || location; }
 }

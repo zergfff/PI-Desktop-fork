@@ -45,6 +45,39 @@
         "icon": "files",
         "entry": "views/index.html",
         "order": 41
+      },
+      {
+        "id": "preview2",
+        "title": {
+          "en": "File Preview 2",
+          "zh-CN": "文件预览 2"
+        },
+        "icon": "files",
+        "entry": "views/index.html",
+        "order": 41,
+        "launcher": false
+      },
+      {
+        "id": "preview3",
+        "title": {
+          "en": "File Preview 3",
+          "zh-CN": "文件预览 3"
+        },
+        "icon": "files",
+        "entry": "views/index.html",
+        "order": 41,
+        "launcher": false
+      },
+      {
+        "id": "preview4",
+        "title": {
+          "en": "File Preview 4",
+          "zh-CN": "文件预览 4"
+        },
+        "icon": "files",
+        "entry": "views/index.html",
+        "order": 41,
+        "launcher": false
       }
     ]
   },

@@ -38,6 +38,7 @@ import {
 import {
   browserPluginTab,
   browserPluginTabForReveal,
+  pluginSubjectTab,
   pluginWorkPanelTab,
 } from "../../lib/work-panel-tabs";
 import { useAppStore } from "../../stores/app-store";
@@ -738,10 +739,17 @@ export function useAppShellRuntime() {
     // (`pi.ui.revealView`). The main process already refused a stale session,
     // so this only has to open — and focus — the tab that session owns.
     const offPluginViewReveal = api.onPluginViewReveal((event) => {
-      useAppStore.getState().openWorkPanelTabForSession(event.sessionId, {
-        ...pluginWorkPanelTab(event.pluginId, event.viewId),
-        ...(event.location ? { location: event.location } : {}),
-      });
+      const state = useAppStore.getState();
+      // Which tabs that session already has decides the slot a subject lands in,
+      // so two PDFs end up as two peer tabs instead of one overwriting the other.
+      const context =
+        state.activeSessionId === event.sessionId
+          ? state.workPanelTabs
+          : (state.workPanelContexts[event.sessionId]?.tabs ?? []);
+      state.openWorkPanelTabForSession(
+        event.sessionId,
+        pluginSubjectTab(event.pluginId, event.viewId, event.location, context),
+      );
     });
     // The renderer owns the composer; only it can answer a target probe or offer.
     const offComposerSuggestion = api.onPluginComposerSuggestion((event) => {

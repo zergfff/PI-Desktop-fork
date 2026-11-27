@@ -116,7 +116,9 @@ function tabLabel(
   pluginViews: PluginViewMeta[],
 ) {
   if (tab.kind === "plugin") {
-    if (tab.resource === "pi.browser/browser" && tab.label) return tab.label;
+    // A view asked to show a subject (a file, a page) names its own tab; otherwise
+    // every slot of that view would read as the same title.
+    if (tab.label) return tab.label;
     const view = pluginViews.find((candidate) => candidate.ref === tab.resource);
     // A view whose plugin was disabled mid-session no longer resolves; fall
     // back to its id rather than leaving the tab blank until it closes.

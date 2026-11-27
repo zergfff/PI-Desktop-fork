@@ -203,6 +203,10 @@ export function registerPluginUiIpc({
       const contributed = loaded.manifest.contributes?.views ?? [];
       contributed.forEach((view, index) => {
         if (!view?.id || !view.entry) return;
+        // Numbered slots of a view that opens one tab per subject are revealable
+        // but not launcher entries: offering "File Preview 2" to click would only
+        // ever show an empty pane.
+        if ((view as { launcher?: boolean }).launcher === false) return;
         // The manifest is validated at install, but a development plugin's
         // files change under us; a missing entry must not become a blank pane.
         if (!existsSync(join(loaded.path, view.entry))) return;
