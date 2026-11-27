@@ -597,7 +597,54 @@ export class BrowserPane {
     wc.setVisualZoomLevelLimits(1, 1).catch(() => undefined);
     wc.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
+      const key = input.key.toLowerCase();
+      // Shortcuts with no modifier, the two every browser shares.
+      if (!input.control && !input.meta && !input.alt) {
+        if (input.key === "F5") {
+          event.preventDefault();
+          if (input.shift) wc.reloadIgnoringCache();
+          else this.action("reload");
+          return;
+        }
+        if (input.key === "F12") {
+          event.preventDefault();
+          if (!wc.isDestroyed()) wc.openDevTools({ mode: "detach" });
+          return;
+        }
+        if (input.key === "Escape" && wc.isLoading()) {
+          event.preventDefault();
+          this.action("stop");
+          return;
+        }
+      }
+      // Alt+←/→ is history in every desktop browser.
+      if (input.alt && !input.control && !input.meta) {
+        if (input.key === "ArrowLeft") {
+          event.preventDefault();
+          if (wc.navigationHistory.canGoBack()) this.action("back");
+          return;
+        }
+        if (input.key === "ArrowRight") {
+          event.preventDefault();
+          if (wc.navigationHistory.canGoForward()) this.action("forward");
+          return;
+        }
+      }
       if (!(input.control || input.meta)) return;
+      if (key === "r") {
+        event.preventDefault();
+        if (input.shift) wc.reloadIgnoringCache();
+        else this.action("reload");
+        return;
+      }
+      if ((key === "n" || key === "t") && !input.shift) {
+        // A new page is a new work-panel tab; it opens on the current address so
+        // the shortcut is useful, and inherits this pane's zoom.
+        event.preventDefault();
+        const current = wc.getURL();
+        if (this.onNewTab && current) this.onNewTab(current);
+        return;
+      }
       if (input.key === "=" || input.key === "+") {
         event.preventDefault();
         this.zoomBy(wc, 0.1);

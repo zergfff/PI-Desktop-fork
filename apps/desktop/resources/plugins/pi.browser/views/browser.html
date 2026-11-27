@@ -440,6 +440,29 @@
         }
       });
 
+      // Chrome's two address-bar habits: Ctrl/Cmd+L to the address, and Ctrl/Cmd+Enter
+      // to complete a bare word into www.<word>.com.
+      document.addEventListener("keydown", (event) => {
+        const mod = event.ctrlKey || event.metaKey;
+        if (mod && event.key.toLowerCase() === "l") {
+          event.preventDefault();
+          input.focus();
+          input.select();
+          return;
+        }
+        if (event.key === "Escape" && document.activeElement === input) input.blur();
+      });
+      input.addEventListener("keydown", (event) => {
+        const mod = event.ctrlKey || event.metaKey;
+        if (event.key !== "Enter" || !mod) return;
+        event.preventDefault();
+        const value = input.value.trim();
+        if (value && !/[:/\\]/.test(value) && !value.includes(".") && !value.includes(" ")) {
+          input.value = `www.${value}.com`;
+        }
+        form.requestSubmit();
+      });
+
       form.addEventListener("submit", (event) => {
         event.preventDefault();
         const value = input.value.trim();
