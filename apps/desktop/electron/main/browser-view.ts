@@ -8,11 +8,6 @@ import { isAllowedHttpUrl, parseAllowedExternalUrl } from "./safe-open-external"
 import { BrowserBackingHost } from "./browser-backing-host";
 import { BROWSER_FIND_SCRIPT, BROWSER_FIND_STYLE } from "./browser-find";
 import {
-  addBrowserExtension,
-  applyBrowserExtensions,
-  openBrowserExtensionsFolder,
-} from "./browser-extensions";
-import {
   adblockCosmeticCss,
   adblockListPath,
   createAdblockRuntime,
@@ -21,6 +16,7 @@ import {
   loadAdblockRules,
   readAdblockEnabled,
   readAdblockSettings,
+  onlineRuleCount,
   refreshOnlineLists,
   writeAdblockEnabled,
   writeAdblockSettings,
@@ -591,8 +587,6 @@ export class BrowserPane {
     // Pinch is a different gesture with its own limits; the panel zoom above is
     // the only one that persists per pane.
     wc.setVisualZoomLevelLimits(1, 1).catch(() => undefined);
-    // Extensions are per session, and a pane may exist before the first page.
-    void applyBrowserExtensions(wc.session);
     wc.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       if (!(input.control || input.meta)) return;
@@ -786,7 +780,9 @@ export class BrowserPane {
             const when = settings.listsUpdatedAt
               ? new Date(settings.listsUpdatedAt).toLocaleDateString()
               : "从未";
-            return count ? `更新在线规则（${count} 个源，上次 ${when}）` : "更新在线规则（未配置）";
+            if (!count) return "更新在线规则（未配置）";
+            const merged = onlineRuleCount(adblockDir());
+            return `更新在线规则（${count} 个源，在线域名 ${merged} 条，上次 ${when}）`;
           })(),
           "Update online lists",
         ),
@@ -840,6 +836,10 @@ export class BrowserPane {
         click: () => void shell.openPath(join(adblockDir(), "adblock.json")),
       },
       {
+        label: label("查看合并后的在线规则", "Show merged online rules"),
+        click: () => void shell.openPath(join(adblockDir(), "adblock-online.txt")),
+      },
+      {
         label: label("在新标签页打开", "Open in new tab"),
         enabled: Boolean(this.onNewTab) && isAllowedHttpUrl(wc.getURL()),
         click: () => {
@@ -862,59 +862,11 @@ export class BrowserPane {
         label: label("打开下载目录", "Open downloads folder"),
         click: () => void shell.openPath(activeDownloadsDir()),
       },
+      // Extension loading is gone on purpose: Electron hands a Manifest V3
+      // blocker its declarativeNetRequest permission and then never enforces the
+      // ruleset, so the only extension UI it could offer was a list of things
+      // that do nothing. Ad blocking lives in the host instead.
       { type: "separator" },
-      {
-        label: label("加载扩展（已解压的文件夹）…", "Load extension (unpacked folder)…"),
-        click: () => {
-          void (async () => {
-            const result = await addBrowserExtension(this.window ?? BrowserWindow.getFocusedWindow());
-            if (!result || "error" in result) {
-              if (result && "error" in result) {
-                await dialog.showMessageBox({
-                  type: "warning",
-                  message: label("无法加载扩展", "Could not load the extension"),
-                  detail: result.error,
-                });
-              }
-              return;
-            }
-            await applyBrowserExtensions(wc.session);
-            this.action("reload");
-          })();
-        },
-      },
-      {
-        label: label("打开扩展文件夹", "Open extensions folder"),
-        click: () => void openBrowserExtensionsFolder(),
-      },
-      ...(() => {
-        // Chrome renders a toolbar icon per extension and hosts its popup; a
-        // WebContentsView has no browser chrome, so the closest honest surface
-        // is a list of what is actually loaded plus the options page each
-        // extension declares. The action popup itself is not reachable from a
-        // host — Electron implements no browser-action UI.
-        const extensions = wc.session.getAllExtensions();
-        if (!extensions.length) return [];
-        return [{
-          label: label(`扩展（${extensions.length}）`, `Extensions (${extensions.length})`),
-          submenu: extensions.map((extension) => {
-            const manifest = extension.manifest as {
-              options_ui?: { page?: string };
-              options_page?: string;
-            };
-            const page = manifest.options_ui?.page ?? manifest.options_page ?? null;
-            return {
-              label: `${extension.name} ${extension.version}`,
-              click: page
-                ? () => {
-                    void wc.loadURL(`chrome-extension://${extension.id}/${page}`).catch(() => undefined);
-                  }
-                : undefined,
-              enabled: Boolean(page),
-            };
-          }),
-        }];
-      })(),
       { label: label("检查元素", "Inspect element"), click: () => wc.inspectElement(params.x, params.y) },
     );
     const window = this.window ?? BrowserWindow.getFocusedWindow();
@@ -953,10 +905,14 @@ export class BrowserPane {
       });
     }
     this.installPageChrome(wc);
+    // A link that asks for a new window is the page's own navigation intent;
+    // handing it to the OS browser drops the reader out of the panel mid-read.
+    // It opens as another workspace browser tab instead.
     wc.setWindowOpenHandler(({ url }) => {
       const allowed = parseAllowedExternalUrl(url);
       if (allowed) {
-        if (this.onOpenUrl) this.onOpenUrl(allowed);
+        if (this.onNewTab) this.onNewTab(allowed);
+        else if (this.onOpenUrl) this.onOpenUrl(allowed);
         else void shell.openExternal(allowed);
       }
       return { action: "deny" };

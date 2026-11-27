@@ -25,6 +25,8 @@ import type { Session } from "electron";
 
 const LIST_FILE = "adblock.txt";
 const STATE_FILE = "adblock.json";
+/** Merged online hosts, written for inspection. */
+export const ONLINE_SUMMARY_FILE = "adblock-online.txt";
 
 /**
  * A deliberately conservative starter list: the ad exchanges, analytics and
@@ -158,14 +160,25 @@ export function parseAdblockRules(text: string): AdblockRuleSet {
 
     // `||domain^` — the host and every subdomain of it.
     if (line.startsWith("||")) {
-      const host = line
+      const body = line
         .slice(2)
         .split("^")[0]
-        .split("/")[0]
-        .replace(/^\*\./, "")
-        .toLowerCase();
-      if (!host || /[*|]/.test(host)) continue;
-      (allow ? rules.allowHosts : rules.blockHosts).add(host);
+        .replace(/^\*\./, "");
+      // A path makes it an address rule, not a host rule: truncating
+      // `||zhihu.com/api/*banners/` to `zhihu.com` would block the whole site.
+      if (!body.includes("/")) {
+        const host = body.toLowerCase();
+        if (!host || /[*|]/.test(host)) continue;
+        (allow ? rules.allowHosts : rules.blockHosts).add(host);
+        continue;
+      }
+      const asPattern = body
+        .split("*")
+        .map((part) => escapeRegExp(part))
+        .join(".*");
+      if (asPattern.length < 6) continue;
+      const anchored = new RegExp(asPattern, "i");
+      (allow ? rules.allowPatterns : rules.blockPatterns).push(anchored);
       continue;
     }
     // Anchored single-slash rules still work as substrings of the path.
@@ -197,6 +210,21 @@ export function loadAdblockRules(dataDir: string): AdblockRuleSet {
 export function adblockCosmeticCss(rules: AdblockRuleSet): string {
   if (!rules.cosmeticSelectors.length) return "";
   return `${rules.cosmeticSelectors.join(",\n")} { display: none !important; }`;
+}
+
+/** How many online host rules are currently merged, for the menu label. */
+export function onlineRuleCount(dataDir: string): number {
+  const file = join(dataDir, ONLINE_SUMMARY_FILE);
+  if (!existsSync(file)) return 0;
+  try {
+    let count = 0;
+    for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
+      if (line.trim() && !line.startsWith("!")) count += 1;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
 }
 
 /** True when the URL should be cancelled. Whitelists win. */
@@ -339,34 +367,67 @@ export async function refreshOnlineLists(
   return { updated, failed };
 }
 
-/** `||host^` rules from an online list, with cosmetic and path rules skipped. */
+/**
+ * `||host^` rules from an online list.
+ *
+ * Only whole-host rules are taken. A rule with a path — `||zhihu.com/api/*banners/`
+ * is one — must **not** be truncated to its host: doing that blocks the entire
+ * site, which is exactly how a filter list turns a page blank. Path matching for
+ * online lists is out of scope, so those lines are skipped; `$` options are
+ * allowed only when they narrow resource types, never when they change the scope
+ * (`$document`, `$domain=`, `$elemhide` would block documents or specific sites).
+ */
 export function parseHostRules(text: string, into: Set<string>): void {
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line.startsWith("||")) continue;
-    const host = line
-      .slice(2)
-      .split("^")[0]
-      .split("/")[0]
-      .split("$")[0]
-      .replace(/^\*\./, "")
-      .toLowerCase();
-    if (!host || /[*|#]/.test(host) || host.length > 253) continue;
+    const match = /^\|\|([^/^$#|*]+)\^?((?:\$[a-z0-9_.,~-]+)?)$/i.exec(line);
+    if (!match) continue;
+    const options = (match[2] ?? "").toLowerCase();
+    if (/document|popup|elemhide|generichide|domain=|third-party/.test(options)) continue;
+    const host = match[1].trim().toLowerCase().replace(/^\*\./, "");
+    if (!host || host.includes("*") || host.length > 253 || !host.includes(".")) continue;
+    if (host.startsWith(".") || host.endsWith(".")) continue;
     into.add(host);
   }
 }
 
-/** Merge the cached online lists into a rule set (host rules only). */
+/**
+ * Merge the cached online lists into a rule set (host rules only).
+ *
+ * The merged hosts are also written to `adblock-online.txt` beside the local
+ * list: without that file "更新在线规则" had no visible effect, and a reader had no
+ * way to tell a successful download from a silent failure.
+ */
 export function mergeOnlineLists(dataDir: string, rules: AdblockRuleSet): AdblockRuleSet {
   const dir = listCacheDir(dataDir);
   if (!existsSync(dir)) return rules;
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".txt")) continue;
+  const files = readdirSync(dir).filter((name) => name.endsWith(".txt"));
+  if (!files.length) return rules;
+  const online = new Set<string>();
+  for (const name of files) {
     try {
-      parseHostRules(readFileSync(join(dir, name), "utf8"), rules.blockHosts);
+      parseHostRules(readFileSync(join(dir, name), "utf8"), online);
     } catch {
       // a corrupt cache entry must not stop the local list from working
     }
+  }
+  for (const host of online) rules.blockHosts.add(host);
+  try {
+    const summary = join(dataDir, ONLINE_SUMMARY_FILE);
+    const stamp = readAdblockSettings(dataDir).listsUpdatedAt ?? new Date().toISOString();
+    writeFileSync(
+      summary,
+      [
+        `! 由在线规则合并生成，供查看；修改请改 adblock.txt 或 adblock.json 的 listUrls`,
+        `! 更新时间：${stamp}，域名规则：${online.size} 条（在线列表只取整域名规则）`,
+        ...[...online].sort(),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  } catch {
+    // the summary is a convenience; failing to write it must not break blocking
   }
   return rules;
 }
