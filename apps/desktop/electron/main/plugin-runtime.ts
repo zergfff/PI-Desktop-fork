@@ -139,10 +139,23 @@ function homeFallbackRoot(pluginId: string): string | null {
   return HOME_FALLBACK_PLUGINS.has(pluginId) ? homedir() : null;
 }
 
-function homeWorkspaceInfo(pluginId: string): { path: string; name: string } | null {
+function homeWorkspaceInfo(pluginId: string): {
+  path: string;
+  name: string;
+  projectId: string;
+  roots: Array<{ path: string; name: string; primary: boolean }>;
+} | null {
   const root = homeFallbackRoot(pluginId);
   if (!root) return null;
-  return { path: root, name: root.split(/[\\/]/).filter(Boolean).at(-1) ?? root };
+  const name = root.split(/[\\/]/).filter(Boolean).at(-1) ?? root;
+  // Shaped like a single-folder project, because a file browser reads `roots` to
+  // render the tree: a bare `{path, name}` shows the root row and nothing under it.
+  return {
+    path: root,
+    name,
+    projectId: `home:${root}`,
+    roots: [{ path: root, name, primary: true }],
+  };
 }
 import { McpCallRegistry } from "./mcp-call-registry";
 import {
