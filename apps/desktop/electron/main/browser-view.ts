@@ -18,6 +18,7 @@ import {
   readAdblockSettings,
   onlineRuleCount,
   refreshOnlineLists,
+  rewriteLocalListFromOnline,
   writeAdblockEnabled,
   writeAdblockSettings,
   type AdblockRuleSet,
@@ -831,6 +832,29 @@ export class BrowserPane {
       {
         label: label("查看合并后的在线规则", "Show merged online rules"),
         click: () => void shell.openPath(join(adblockDir(), "adblock-online.txt")),
+      },
+      {
+        label: label("更新拦截规则（用在线列表重写 adblock.txt）", "Apply online list to adblock.txt"),
+        enabled: onlineRuleCount(adblockDir()) > 0,
+        click: () => {
+          void (async () => {
+            const result = rewriteLocalListFromOnline(adblockDir());
+            reloadAdblockRules();
+            if (!wc.isDestroyed()) wc.reload();
+            await dialog.showMessageBox({
+              type: result.written ? "info" : "warning",
+              message: result.written
+                ? `adblock.txt 已重写：${result.written} 条域名规则`
+                : "没有可用的在线规则，请先更新在线规则",
+              detail: result.written
+                ? [
+                    `保留白名单与元素隐藏规则 ${result.kept} 条`,
+                    result.backup ? `原文件已备份：${result.backup}` : "（备份失败）",
+                  ].join("\n")
+                : "右键 → 更新在线规则，下载成功后再试。",
+            });
+          })();
+        },
       },
       {
         label: label("在新标签页打开", "Open in new tab"),

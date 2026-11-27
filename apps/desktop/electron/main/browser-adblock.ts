@@ -121,6 +121,69 @@ export function ensureAdblockList(dataDir: string): string {
 }
 
 /**
+ * Rewrite `adblock.txt` from `adblock-online.txt`.
+ *
+ * The two files answer different questions — one is what the reader wrote, the
+ * other what the subscriptions currently say — and a reader who wants the
+ * subscriptions to *be* the list should not have to paste five thousand lines by
+ * hand. Replacing is still destructive, so:
+ *
+ *  - the previous file is copied to `adblock.txt.bak-<timestamp>` first;
+ *  - whitelist (`@@`) and cosmetic (`##`) lines survive, because they are the only
+ *    thing in this file the online report cannot carry — dropping them would
+ *    silently re-enable ads the reader had exempted and stop hiding their boxes;
+ *  - the header says where the body came from and when.
+ */
+export function rewriteLocalListFromOnline(dataDir: string): {
+  written: number;
+  kept: number;
+  backup?: string;
+} {
+  const listFile = ensureAdblockList(dataDir);
+  const summaryFile = join(dataDir, ONLINE_SUMMARY_FILE);
+  if (!existsSync(summaryFile)) return { written: 0, kept: 0 };
+  const summary = readFileSync(summaryFile, "utf8");
+  const online: string[] = [];
+  let stamp = new Date().toISOString();
+  for (const line of summary.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("!")) {
+      const match = /更新时间：([^，]+)/.exec(trimmed);
+      if (match) stamp = match[1].trim();
+      continue;
+    }
+    online.push(trimmed);
+  }
+  if (!online.length) return { written: 0, kept: 0 };
+
+  const existing = readFileSync(listFile, "utf8");
+  const kept = existing
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("@@") || line.includes("##"));
+  const backup = `${listFile}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  try {
+    writeFileSync(backup, existing, "utf8");
+  } catch {
+    // no backup is a warning, not a reason to refuse the rewrite
+  }
+
+  const body = [
+    "! PI-Desktop 广告拦截规则",
+    `! 由在线列表重写于 ${new Date().toISOString()}（在线数据时间：${stamp}）`,
+    `! 域名规则 ${online.length} 条；本文件里 @@ 白名单与 ## 元素隐藏规则在重写时保留`,
+    "! 想保留手写的路径规则（/ads/banner 这类），请写在下面这段注释之前——重写会覆盖其它内容",
+    ...kept,
+    "",
+    ...online.sort(),
+    "",
+  ].join("\n");
+  writeFileSync(listFile, body, "utf8");
+  return { written: online.length, kept: kept.length, backup };
+}
+
+/**
  * Parse the list.
  *
  * Rules that cannot be expressed as a request filter are skipped rather than
