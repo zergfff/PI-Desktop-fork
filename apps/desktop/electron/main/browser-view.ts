@@ -648,24 +648,78 @@ export class BrowserPane {
   }
 
   /**
-   * Fit to width. The shrunken factor depends on the document's own layout
-   * width, which only the page knows, so it is measured inside the page rather
-   * than extrapolated from the pane's bounds.
+   * Fit to width: shrink until the document's layout width fills the view.
+   *
+   * The previous version divided viewport by content and used that as the new
+   * factor, which forgot that both numbers are measured *at the current zoom* —
+   * so the result depended on what the zoom happened to be and needed repeating.
+   * Both CSS widths scale with the factor, so the correction is
+   * `currentFactor × viewport / content`, and it only ever shrinks: enlarging a
+   * narrow article to fill a wide pane is not what "fit to width" means.
+   *
+   * A second pass runs after reflow (webfonts, lazy images) because the width
+   * measured at `dom-ready` is often not the final one.
    */
   private async fitToWidth(wc: WebContents): Promise<void> {
-    try {
-      const ratio = (await wc.executeJavaScript(
-        "(() => { const d = document.documentElement;" +
-          " const w = Math.max(d.scrollWidth, document.body ? document.body.scrollWidth : 0);" +
-          " return w > 0 ? window.innerWidth / w : 1; })()",
-        true,
-      )) as unknown;
-      const value = typeof ratio === "number" && Number.isFinite(ratio) ? ratio : 1;
-      this.zoomFactor = Math.min(5, Math.max(0.25, Math.round(value * 100) / 100));
-      this.applyZoom(wc);
-    } catch {
-      /* the page navigated away or refused evaluation */
+    const measure = async (): Promise<{ content: number; viewport: number } | null> => {
+      try {
+        const value = (await wc.executeJavaScript(
+          "(() => { const d = document.documentElement;" +
+            " const body = document.body;" +
+            " const content = Math.max(d.scrollWidth, body ? body.scrollWidth : 0);" +
+            " const viewport = d.clientWidth || window.innerWidth || 0;" +
+            " return { content, viewport }; })()",
+          true,
+        )) as unknown;
+        if (
+          value &&
+          typeof value === "object" &&
+          Number.isFinite((value as { content?: number }).content) &&
+          Number.isFinite((value as { viewport?: number }).viewport)
+        ) {
+          const { content, viewport } = value as { content: number; viewport: number };
+          if (content > 0 && viewport > 0) return { content, viewport };
+        }
+      } catch {
+        // the page navigated away or refused evaluation
+      }
+      return null;
+    };
+
+    const apply = (measured: { content: number; viewport: number } | null) => {
+      if (!measured) return;
+      // Read the zoom the page is actually rendered at: Chromium restores a
+      // per-origin zoom on navigation, so the pane's own factor can be stale and
+      // the correction would then be applied to the wrong baseline (this is why
+      // the old version seemed to need two attempts).
+      const current = wc.isDestroyed() ? this.zoomFactor : wc.getZoomFactor();
+      // Three decimals: rounding to whole percent leaves a fixed-width layout a
+      // few pixels wider than the pane, i.e. a horizontal scrollbar that the
+      // feature was supposed to remove.
+      const rounded = Math.round(current * (measured.viewport / measured.content) * 1000) / 1000;
+      const next = Math.min(1, Math.max(0.25, rounded));
+      if (Math.abs(next - current) < 0.005) return;
+      this.zoomFactor = next;
+      if (!wc.isDestroyed()) wc.setZoomFactor(next);
+    };
+
+    const first = await measure();
+    if (!first) return;
+    // Already fits (or the content is narrower than the view): stay at 100%.
+    if (first.content <= first.viewport + 2) {
+      if (wc.getZoomFactor() < 1) {
+        this.zoomFactor = 1;
+        wc.setZoomFactor(1);
+      }
+      return;
     }
+    apply(first);
+    setTimeout(() => {
+      if (wc.isDestroyed()) return;
+      void measure().then((second) => {
+        if (second && second.content > second.viewport + 2) apply(second);
+      });
+    }, 400);
   }
 
   private async openFind(wc: WebContents): Promise<void> {
@@ -737,40 +791,8 @@ export class BrowserPane {
         },
       },
       {
-        label: label(
-          `本次已拦截 ${adblockRuntime.snapshot().blocked} 个请求`,
-          `${adblockRuntime.snapshot().blocked} requests blocked`,
-        ),
-        enabled: false,
-      },
-      {
         label: label("编辑拦截规则…", "Edit block list…"),
         click: () => void shell.openPath(ensureAdblockList(adblockDir())),
-      },
-      {
-        label: label("重新加载规则", "Reload block list"),
-        click: () => {
-          reloadAdblockRules();
-          if (!wc.isDestroyed()) wc.reload();
-        },
-      },
-      {
-        label: label("本站不拦截广告", "Do not block ads on this site"),
-        enabled: isAllowedHttpUrl(wc.getURL()),
-        click: () => {
-          const host = (() => {
-            try {
-              return new URL(wc.getURL()).hostname;
-            } catch {
-              return "";
-            }
-          })();
-          if (!host) return;
-          const file = ensureAdblockList(adblockDir());
-          appendFileSync(file, `@@||${host}^\n`, "utf8");
-          reloadAdblockRules();
-          if (!wc.isDestroyed()) wc.reload();
-        },
       },
       {
         label: label(
@@ -800,35 +822,6 @@ export class BrowserPane {
                 : "规则已重新加载，页面已刷新。",
             });
           })();
-        },
-      },
-      {
-        label: label("启用 / 停用 EasyList China", "Toggle EasyList China"),
-        click: () => {
-          const settings = readAdblockSettings(adblockDir());
-          const source = "https://easylist-downloads.adblockplus.org/easylistchina.txt";
-          const enabled = (settings.listUrls ?? []).includes(source);
-          writeAdblockSettings(adblockDir(), {
-            ...settings,
-            listUrls: enabled ? (settings.listUrls ?? []).filter((url) => url !== source) : [...(settings.listUrls ?? []), source],
-          });
-          if (!enabled) {
-            void (async () => {
-              const result = await refreshOnlineLists(adblockDir());
-              reloadAdblockRules();
-              if (!wc.isDestroyed()) wc.reload();
-              await dialog.showMessageBox({
-                type: result.failed.length ? "warning" : "info",
-                message: result.failed.length ? "EasyList China 下载失败" : "EasyList China 已启用",
-                detail: result.failed.length
-                  ? result.failed.map((item) => item.error).join("\n")
-                  : "已下载并合并，页面已刷新。",
-              });
-            })();
-          } else {
-            reloadAdblockRules();
-            if (!wc.isDestroyed()) wc.reload();
-          }
         },
       },
       {
