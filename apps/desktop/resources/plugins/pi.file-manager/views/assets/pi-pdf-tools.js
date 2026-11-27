@@ -229,6 +229,7 @@
       paint();
       ensureNavHandle();
       syncOpenDefault();
+      ensureAddressBar();
     }, 120);
   };
   const scroller = document.querySelector(".pdf-scroll") ?? document.body;
@@ -252,6 +253,49 @@
       })
       .catch(() => {});
   }
+
+  // ── 地址栏：文件管理器的根可以手输 ─────────────────────────────────────────
+  // 文件管理器本来就是个浏览器，根不该只有"项目或主目录"。输入 `C:`、`D:\work`
+  // 这类绝对路径就把它设成新的根；换根后整页重载，树/搜索/Git 都按新根重新推导。
+  const ensureAddressBar = () => {
+    if (isPreview) return;
+    const header = document.querySelector("header");
+    if (!header || header.querySelector(".pi-fm-addr")) return;
+    const form = document.createElement("form");
+    form.className = "pi-fm-addr";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.spellcheck = false;
+    input.placeholder = "输入路径，如 C: 或 C:\\Users\\ASUS\\Documents";
+    const go = document.createElement("button");
+    go.type = "submit";
+    go.textContent = "前往";
+    form.append(input, go);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const target = input.value.trim();
+      if (!target) return;
+      input.classList.remove("pi-invalid");
+      go.disabled = true;
+      try {
+        const result = await bridge.invoke("fm.setRoot", { path: target });
+        if (result && result.ok) {
+          window.location.reload();
+          return;
+        }
+      } catch {
+        input.classList.add("pi-invalid");
+      }
+      go.disabled = false;
+    });
+    header.append(form);
+    bridge
+      .invoke("fm.root", {})
+      .then((result) => {
+        if (result && result.path && !input.value) input.value = result.path;
+      })
+      .catch(() => {});
+  };
 
   // ── Ctrl + 滚轮缩放（所有预览类型）─────────────────────────────────────────
   let zoomFactor = 1;
@@ -477,6 +521,7 @@
   window.setTimeout(() => {
     ensureNavHandle();
     syncOpenDefault();
+    ensureAddressBar();
     prunePdfTabs();
   }, 1200);
 })();

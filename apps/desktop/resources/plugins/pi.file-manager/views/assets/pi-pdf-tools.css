@@ -186,3 +186,51 @@ html.pi-preview-only .pdf-navigation input {
   opacity: 0.6;
   cursor: default;
 }
+
+/* ── 文件管理器地址栏 ─────────────────────────────────────────────────────── */
+.pi-fm-addr {
+  display: flex;
+  flex: 1 1 220px;
+  min-width: 120px;
+  gap: 4px;
+  align-items: center;
+}
+
+.pi-fm-addr input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  background: var(--surface, transparent);
+  color: var(--foreground, #e6e6e6);
+  font: inherit;
+  font-size: 12px;
+}
+
+.pi-fm-addr input:focus {
+  outline: none;
+  border-color: var(--accent, rgba(128, 128, 128, 0.6));
+}
+
+.pi-fm-addr input.pi-invalid {
+  border-color: rgba(220, 60, 60, 0.8);
+}
+
+.pi-fm-addr button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  background: var(--surface, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pi-fm-addr button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

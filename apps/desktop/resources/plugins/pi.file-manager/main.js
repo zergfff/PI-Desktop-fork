@@ -264,6 +264,22 @@ async function currentRoot() {
   const workspace = await workspaceOrHome();
   if (!workspace?.path) return null;
   if (isRemoteWorkspace(workspace)) throw fail("REMOTE_UNSUPPORTED", "Remote files must use the Host read gateway");
+
+  // 地址栏里输入过目录就整个树改成以它为根：文件管理器是浏览器，根不该只有项目或主目录。
+  const typed = typeof prefs.rootPath === "string" ? prefs.rootPath : "";
+  if (typed) {
+    const stat = await fs.stat(typed).catch(() => null);
+    if (stat?.isDirectory()) {
+      const name = path.basename(typed) || typed;
+      const synthetic = {
+        path: typed,
+        name,
+        projectId: `folder:${typed}`,
+        roots: [{ path: typed, name, primary: true }],
+      };
+      return rootPayload(synthetic, { path: typed, name, primary: true });
+    }
+  }
   return rootPayload(workspace, selectedRootOf(workspace));
 }
 
@@ -2534,6 +2550,52 @@ async function handlePdfCommit(payload) {
   return { ok: true, added: result.added, skipped: result.skipped, size: after.size, mtimeMs: after.mtimeMs };
 }
 
+/**
+ * 地址栏：读当前根、换当前根。
+ *
+ * 换根只是把这个目录记进 pref，然后由视图整页重载——树、搜索、Git、原子写全都按
+ * `currentRoot()` 推导，重载比就地改写状态安全得多。
+ */
+async function handleRoot() {
+  const root = await currentRoot();
+  return { ok: true, path: root?.path ?? "", name: root?.name ?? "" };
+}
+
+async function handleSetRoot(payload) {
+  const raw = typeof payload?.path === "string" ? payload.path.trim() : "";
+  if (!raw) throw fail("INVALID_ARGUMENT", "path is required");
+  const target = normalizeTypedPath(raw);
+  if (!target) throw fail("INVALID_PATH", "not an absolute path");
+
+  const stat = await fs.stat(target).catch(() => null);
+  if (!stat) throw fail("NOT_FOUND", "no such folder");
+  if (!stat.isDirectory()) throw fail("INVALID_PATH", "not a folder");
+  if (isDenied("", "read")) throw fail("DENIED_PATH", "refused path");
+
+  prefs = { ...prefs, rootPath: target };
+  try {
+    await pi.plugin.setSettings({ fmPrefs: prefs });
+  } catch {
+    /* 写不进去只影响下次打开 */
+  }
+  return { ok: true, path: target, name: path.basename(target) || target };
+}
+
+/**
+ * 地址栏输入 → 绝对路径。接受 `C:`、`C:\dir`、`\\server\share`、`~/x`，
+ * 以及「相对当前根的一个名字」（`Documents`）。
+ */
+function normalizeTypedPath(raw) {
+  let value = raw.trim();
+  if (!value) return null;
+  if (value === "~" || value.startsWith("~/") || value.startsWith("~\\")) {
+    value = path.join(require("node:os").homedir(), value.slice(1));
+  }
+  if (/^[A-Za-z]:$/.test(value)) value += "\\";
+  if (path.isAbsolute(value)) return path.normalize(value);
+  return null;
+}
+
 async function handlePdfAnnotate(payload) {
   const relPath = typeof payload?.path === "string" ? payload.path : "";
   const ops = Array.isArray(payload?.ops) ? payload.ops.slice(0, 200) : [];
@@ -3944,6 +4006,12 @@ function sanitizePrefs(partial) {
       next.splitRatio = Math.min(Math.max(partial.splitRatio, 0.15), 0.7);
     }
     if (typeof partial.treeCollapsed === "boolean") next.treeCollapsed = partial.treeCollapsed;
+    // 地址栏选定的根：只收绝对路径，存在性在用到时再验（目录可能被删掉）。
+    if (typeof partial.rootPath === "string" && path.isAbsolute(partial.rootPath)) {
+      next.rootPath = partial.rootPath;
+    } else if (partial.rootPath === null) {
+      delete next.rootPath;
+    }
     if (typeof partial.showIgnored === "boolean") next.showIgnored = partial.showIgnored;
     if (typeof partial.watchFiles === "boolean") next.watchFiles = partial.watchFiles;
     if (typeof partial.mdPreview === "boolean") next.mdPreview = partial.mdPreview;
@@ -4047,6 +4115,8 @@ const CHANNELS = {
   // 编辑器探测与「通过…打开」（0.9.0）。前者一天只真的探一次（落盘缓存，多开共享），
   // 后者只认探测结果里的 id，视图指定不了可执行文件。
   "fm.editors": handleEditors,
+  "fm.root": handleRoot,
+  "fm.setRoot": handleSetRoot,
   "fm.pdf.annotate": handlePdfAnnotate,
   "fm.pdf.draft": handlePdfDraft,
   "fm.pdf.stage": handlePdfStage,

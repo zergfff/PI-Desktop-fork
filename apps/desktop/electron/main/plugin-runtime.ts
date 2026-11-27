@@ -5328,7 +5328,23 @@ export class PluginRuntime {
     // default app, reveal in Explorer — must resolve against the same place instead
     // of failing with "No workspace is open". Deliberately not `workspace.get`: that
     // answer drives the view's identity, and changing it produces WORKSPACE_CHANGED.
-    return HOME_FS_ROOT_PLUGINS.has(loaded.manifest.id) ? homedir() : null;
+    if (!HOME_FS_ROOT_PLUGINS.has(loaded.manifest.id)) return null;
+    // The file manager can be pointed at any folder from its address bar; the OS
+    // actions it offers must resolve against that same folder, not the home one.
+    return this.pluginRootOverride(loaded) ?? homedir();
+  }
+
+  /** Root the plugin recorded for itself in its own settings, when it names a real folder. */
+  private pluginRootOverride(loaded: LoadedPlugin): string | null {
+    try {
+      const file = join(this.pluginDataDir(loaded.manifest.id), "settings.json");
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as { fmPrefs?: { rootPath?: unknown } };
+      const rootPath = parsed?.fmPrefs?.rootPath;
+      if (typeof rootPath === "string" && isAbsolute(rootPath) && statSync(rootPath).isDirectory()) return rootPath;
+    } catch {
+      /* no settings yet, or the folder is gone */
+    }
+    return null;
   }
 
   private remoteFsRead(loaded: LoadedPlugin, operation: "list" | "preview", ref: string, options?: PluginFsReadOptions) {
