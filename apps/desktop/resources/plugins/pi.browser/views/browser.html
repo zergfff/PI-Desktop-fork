@@ -463,10 +463,25 @@
         form.requestSubmit();
       });
 
+      // Like any browser: what is not an address is a search. A bare word, a
+      // phrase with spaces, or a host without a dot cannot be navigated to, so it
+      // goes to the search engine instead of failing as a URL.
+      const SEARCH_URL = "https://www.bing.com/search?q=";
+      const asAddress = (raw) => {
+        const value = raw.trim();
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
+        if (!value || /\s/.test(value)) return null;
+        const host = value.split("/")[0];
+        if (!host.includes(".") || host.startsWith(".") || host.endsWith(".")) return null;
+        return `https://${value}`;
+      };
+
       form.addEventListener("submit", (event) => {
         event.preventDefault();
-        const value = input.value.trim();
-        if (!value) return;
+        const raw = input.value.trim();
+        if (!raw) return;
+        const value = asAddress(raw) ?? `${SEARCH_URL}${encodeURIComponent(raw)}`;
+        if (!asAddress(raw)) input.value = value;
         const request = ++navigationRequest;
         paint({ url: value, isLoading: true });
         void bridge.invoke("browser.navigate", { url: value, ...navigationContext }).then((state) => {

@@ -1,6 +1,6 @@
 {
   "name": "@pi-desktop/desktop",
-  "version": "0.24.0-fork.19",
+  "version": "0.24.0-fork.20",
   "desktopName": "pi-desktop.desktop",
   "private": true,
   "description": "PI-Desktop Electron application",
@@ -109,7 +109,10 @@
       "!**/node_modules/koffi/{doc,vendor}/**",
       "!**/node_modules/@picovoice/pvrecorder-node/{src/**,copy.js,jest.config.js,tsconfig.json}",
       "!**/node_modules/@picovoice/pvrecorder-node/lib/!(${os}*|raspberry-pi)/**",
-      "!**/node_modules/@picovoice/pvrecorder-node/[!${os}]ib/raspberry-pi/**"
+      "!**/node_modules/@picovoice/pvrecorder-node/[!${os}]ib/raspberry-pi/**",
+      "!**/node_modules/transcribe-cpp/**",
+      "!**/node_modules/@transcribe-cpp/**",
+      "!**/node_modules/@picovoice/**"
     ],
     "electronLanguages": [
       "en-US",
@@ -294,12 +297,7 @@
       ]
     },
     "asarUnpack": [
-      "node_modules/transcribe-cpp/**/*.node",
-      "node_modules/transcribe-cpp/**/bin/**",
-      "node_modules/@transcribe-cpp/**",
-      "node_modules/@koromix/**/*.node",
-      "node_modules/@picovoice/pvrecorder-node/**/*.node",
-      "node_modules/@picovoice/pvrecorder-node/**/lib/**"
+      "node_modules/@koromix/**/*.node"
     ],
     "asar": {
       "smartUnpack": false

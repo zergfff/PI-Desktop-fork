@@ -21,6 +21,7 @@ import {
 import { desktopDataDir } from "./data-paths";
 import { activeDownloadsDir, downloadRegistry } from "./browser-downloads";
 import { BROWSER_CLOAK_SCRIPT, browserUserAgent } from "./browser-cloak";
+import { captureArticle, captureConsole, pickElement } from "./browser-capture";
 
 /**
  * Work panel embedded preview browser (D100, ADR 0019).
@@ -81,6 +82,11 @@ function ensurePlainUserAgent(session: Electron.Session): void {
       });
     },
   );
+}
+
+/** Captures land beside the other scratch data, not in a private folder. */
+function captureScratchDir(): string {
+  return join(desktopDataDir(), "scratch");
 }
 
 function ensureAdblock(session: Electron.Session): void {
@@ -222,6 +228,8 @@ export class BrowserPane {
   /** Key of the inserted cosmetic CSS, so a toggle can remove it again. */
   private cosmeticKey: string | null = null;
   private downloadsSubscribed = false;
+  /** Recent console lines, errors kept for the capture action. */
+  private consoleMessages: Array<{ level: string; message: string }> = [];
 
   private readonly onOpenUrl?: (url: string) => void;
   /** Ask the host for another browser tab showing `url`. */
@@ -614,6 +622,17 @@ export class BrowserPane {
       this.applyCosmeticFilter(wc);
     });
     wc.on("context-menu", (_event, params) => this.showPageMenu(wc, params));
+    // Kept for the console capture; bounded so a chatty page cannot grow it.
+    wc.on("console-message", (...args: unknown[]) => {
+      const details = args[0] as { level?: unknown; message?: unknown } | undefined;
+      const level = typeof args[1] === "number"
+        ? ["debug", "info", "warning", "error"][args[1]] ?? "info"
+        : String(details?.level ?? "info");
+      const message = typeof args[2] === "string" ? args[2] : String(details?.message ?? "");
+      if (!message) return;
+      this.consoleMessages.push({ level, message: message.slice(0, 2000) });
+      if (this.consoleMessages.length > 300) this.consoleMessages.shift();
+    });
     // Ctrl/Cmd + wheel, exactly like a browser: Chromium reports the gesture,
     // the pane owns the factor it has been keeping all along.
     wc.on("zoom-changed", (_event, direction) => this.zoomBy(wc, direction === "in" ? 0.1 : -0.1));
@@ -911,6 +930,59 @@ export class BrowserPane {
       // blocker its declarativeNetRequest permission and then never enforces the
       // ruleset, so the only extension UI it could offer was a list of things
       // that do nothing. Ad blocking lives in the host instead.
+      { type: "separator" },
+      {
+        label: label("抓取元素（复制到剪贴板）", "Capture element (copy to clipboard)"),
+        click: () => {
+          void (async () => {
+            const result = await pickElement(wc, captureScratchDir());
+            if (!result) return;
+            await dialog.showMessageBox({
+              type: "info",
+              message: "元素信息已复制到剪贴板",
+              detail: `${result.summary}\n\n文件：${result.path}\n\n在对话输入框按 Ctrl+V 粘贴即可发送。`,
+            });
+          })();
+        },
+      },
+      {
+        label: label("复制页面正文", "Copy page article"),
+        click: () => {
+          void (async () => {
+            try {
+              const result = await captureArticle(wc, captureScratchDir());
+              await dialog.showMessageBox({
+                type: "info",
+                message: `正文已复制（${result.text.length} 字符）`,
+                detail: `文件：${result.path}\n\n在对话输入框按 Ctrl+V 粘贴即可发送。`,
+              });
+            } catch (error) {
+              await dialog.showMessageBox({
+                type: "warning",
+                message: "取正文失败",
+                detail: (error as Error).message ?? String(error),
+              });
+            }
+          })();
+        },
+      },
+      {
+        label: label(
+          `复制控制台输出（${this.consoleMessages.filter((entry) => entry.level === "error").length} 条错误）`,
+          "Copy console output",
+        ),
+        enabled: this.consoleMessages.length > 0,
+        click: () => {
+          void (async () => {
+            const result = captureConsole(captureScratchDir(), this.consoleMessages);
+            await dialog.showMessageBox({
+              type: "info",
+              message: "控制台输出已复制",
+              detail: `文件：${result.path}\n\n在对话输入框按 Ctrl+V 粘贴即可发送。`,
+            });
+          })();
+        },
+      },
       { type: "separator" },
       { label: label("检查元素", "Inspect element"), click: () => wc.inspectElement(params.x, params.y) },
     );
