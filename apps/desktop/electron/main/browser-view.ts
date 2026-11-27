@@ -15,12 +15,7 @@ import {
   installAdblock,
   loadAdblockRules,
   readAdblockEnabled,
-  readAdblockSettings,
-  onlineRuleCount,
-  refreshOnlineLists,
-  rewriteLocalListFromOnline,
   writeAdblockEnabled,
-  writeAdblockSettings,
   type AdblockRuleSet,
 } from "./browser-adblock";
 import { desktopDataDir } from "./data-paths";
@@ -265,6 +260,18 @@ export class BrowserPane {
   /** Newest-first download list, mirrored into the state the chrome reads. */
   get downloads() {
     return downloadRegistry.list();
+  }
+
+  /** Current page zoom, so a new tab can open at the same scale. */
+  getZoom(): number {
+    return this.zoomFactor;
+  }
+
+  setZoom(factor: number): void {
+    if (!Number.isFinite(factor)) return;
+    this.zoomFactor = Math.min(5, Math.max(0.25, factor));
+    const wc = this.getWebContents();
+    if (wc && !wc.isDestroyed()) this.applyZoom(wc);
   }
 
   getWebContents() {
@@ -622,7 +629,14 @@ export class BrowserPane {
       this.cosmeticKey = null;
     }
     if (!readAdblockEnabled(adblockDir())) return;
-    const css = adblockCosmeticCss(adblockRules ?? reloadAdblockRules());
+    const pageHost = (() => {
+      try {
+        return new URL(wc.getURL()).hostname.toLowerCase();
+      } catch {
+        return "";
+      }
+    })();
+    const css = adblockCosmeticCss(adblockRules ?? reloadAdblockRules(), pageHost);
     if (!css) return;
     void wc
       .insertCSS(css)
@@ -794,67 +808,6 @@ export class BrowserPane {
       {
         label: label("编辑拦截规则…", "Edit block list…"),
         click: () => void shell.openPath(ensureAdblockList(adblockDir())),
-      },
-      {
-        label: label(
-          (() => {
-            const settings = readAdblockSettings(adblockDir());
-            const count = settings.listUrls?.length ?? 0;
-            const when = settings.listsUpdatedAt
-              ? new Date(settings.listsUpdatedAt).toLocaleDateString()
-              : "从未";
-            if (!count) return "更新在线规则（未配置）";
-            const merged = onlineRuleCount(adblockDir());
-            return `更新在线规则（${count} 个源，在线域名 ${merged} 条，上次 ${when}）`;
-          })(),
-          "Update online lists",
-        ),
-        enabled: Boolean(readAdblockSettings(adblockDir()).listUrls?.length),
-        click: () => {
-          void (async () => {
-            const result = await refreshOnlineLists(adblockDir());
-            reloadAdblockRules();
-            if (!wc.isDestroyed()) wc.reload();
-            await dialog.showMessageBox({
-              type: result.failed.length ? "warning" : "info",
-              message: `在线规则：成功 ${result.updated} 个来源`,
-              detail: result.failed.length
-                ? result.failed.map((item) => `${item.url}\n  ${item.error}`).join("\n")
-                : "规则已重新加载，页面已刷新。",
-            });
-          })();
-        },
-      },
-      {
-        label: label("规则来源设置…", "Rule sources…"),
-        click: () => void shell.openPath(join(adblockDir(), "adblock.json")),
-      },
-      {
-        label: label("查看合并后的在线规则", "Show merged online rules"),
-        click: () => void shell.openPath(join(adblockDir(), "adblock-online.txt")),
-      },
-      {
-        label: label("更新拦截规则（用在线列表重写 adblock.txt）", "Apply online list to adblock.txt"),
-        enabled: onlineRuleCount(adblockDir()) > 0,
-        click: () => {
-          void (async () => {
-            const result = rewriteLocalListFromOnline(adblockDir());
-            reloadAdblockRules();
-            if (!wc.isDestroyed()) wc.reload();
-            await dialog.showMessageBox({
-              type: result.written ? "info" : "warning",
-              message: result.written
-                ? `adblock.txt 已重写：${result.written} 条域名规则`
-                : "没有可用的在线规则，请先更新在线规则",
-              detail: result.written
-                ? [
-                    `保留白名单与元素隐藏规则 ${result.kept} 条`,
-                    result.backup ? `原文件已备份：${result.backup}` : "（备份失败）",
-                  ].join("\n")
-                : "右键 → 更新在线规则，下载成功后再试。",
-            });
-          })();
-        },
       },
       {
         label: label("在新标签页打开", "Open in new tab"),

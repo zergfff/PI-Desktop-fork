@@ -313,9 +313,16 @@ export class BrowserHost {
         },
         (url) => {
           // A second browser page is a second work-panel tab; opening it from the
-          // page menu is the only creation path a reader has.
+          // page menu is the only creation path a reader has. It opens at the
+          // parent's zoom, so a zoomed-in reader does not have to zoom again.
           if (this.pages.get(key) !== page) return;
-          void this.openTab({ url }, sessionId);
+          const inherited = page.pane.getZoom();
+          void this.openTab({ url }, sessionId).then(({ tabId }) => {
+            const opened = this.pages.get(this.key(String(sessionId), tabId));
+            if (opened && Number.isFinite(inherited) && inherited > 0 && inherited !== 1) {
+              opened.pane.setZoom(inherited);
+            }
+          });
         },
       ),
     };

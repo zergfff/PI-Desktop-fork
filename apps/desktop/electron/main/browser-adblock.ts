@@ -1,41 +1,48 @@
 /**
- * Network-level ad and tracker blocking for the preview browser.
+ * Ad and tracker blocking for the preview browser, driven by one local list.
  *
- * Extensions cannot do this job here. A Manifest V3 blocker such as uBlock Lite
- * loads into the session and then blocks nothing: Electron hands the extension
- * its `declarativeNetRequest` permission but never enforces the static ruleset —
- * measured on Electron 43 with a one-rule extension whose `/blocked.js` still
- * executed. What *is* enforced is the host's own `webRequest.onBeforeRequest`,
- * so the filter runs there instead: one listener on the browser partition, a
- * user-editable list, and a counter the page menu can show.
+ * Extensions cannot do this job here: Electron grants a Manifest V3 blocker its
+ * `declarativeNetRequest` permission and then never enforces the ruleset (a
+ * one-rule probe extension loaded fine and its script still executed), while the
+ * host's own `webRequest.onBeforeRequest` does cancel. So the filter lives here.
  *
- * The list file is `<data dir>/adblock.txt`, Adblock Plus syntax as far as it
- * matters for requests:
- *   `||example.com^`   block the host and everything under it
- *   `@@||example.com^` never block it (whitelist, wins over blocks)
- *   `/ads/banner`      block any URL containing the text (`*` works as a wildcard)
- *   `! comment`        ignored, as are cosmetic rules (`##`) — nothing injects CSS
- * Options after `$` are dropped, so `$third-party,script` degrades to a plain
- * block rather than being misread.
+ * `~/.pi-desktop/adblock.txt` is the whole configuration — there is no online
+ * subscription list to merge, by request. It accepts the Adblock Plus syntax that
+ * published lists actually use, so EasyList, EasyList China or an AdGuard list can
+ * be pasted in as-is:
+ *
+ *   ||example.com^              host and everything under it
+ *   ||example.com/api/*banners* host + path, `*` is any run of characters
+ *   ||example.com^$script,third-party   resource types and third-party scope
+ *   ||example.com^$domain=a.com|~b.com  only when the page is a.com, not b.com
+ *   @@||example.com^            whitelist, wins over any block
+ *   @@||example.com^$document   allow a whole document (ad-block walls)
+ *   /banner[0-9]+\.gif/         regular expression
+ *   |https://cdn.example.com/   anchored to the start of the URL
+ *   ##.ad-slot                  hide the element
+ *   example.com##.ad-slot       hide it only on that site
+ *   #@#.ad-slot                 stop hiding it
+ *   ! comment                   ignored
+ *
+ * `$document` blocks are deliberately not applied to the main frame: a list entry
+ * that blocks a whole site would turn the page blank, which reads as "the browser
+ * is broken" rather than "this page is ad-free".
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Session } from "electron";
 
 const LIST_FILE = "adblock.txt";
 const STATE_FILE = "adblock.json";
-/** Merged online hosts, written for inspection. */
-export const ONLINE_SUMMARY_FILE = "adblock-online.txt";
 
 /**
- * A deliberately conservative starter list: the ad exchanges, analytics and
- * Chinese tracker domains that show up on ordinary pages. Anything aggressive
- * belongs in the user's own list, where a false positive is theirs to correct.
+ * A conservative starter list: ad exchanges, analytics and the Chinese tracker
+ * domains that show up on ordinary pages. Anything aggressive belongs in the
+ * reader's own edits, where a false positive is theirs to correct.
  */
 const DEFAULT_RULES = [
-  "! PI-Desktop 广告拦截规则（Adblock Plus 语法；@@ 开头为白名单）",
-  "! 直接编辑本文件即可生效，重启或重开浏览器页后加载。",
+  "! PI-Desktop 广告拦截规则（Adblock Plus 语法；@@ 开头为白名单，## 开头为元素隐藏）",
+  "! 可以直接粘贴 EasyList / EasyList China / AdGuard 列表的内容；保存后右键 → 编辑拦截规则… 再关掉重开页面即生效。",
   "||doubleclick.net^",
   "||googlesyndication.com^",
   "||googleadservices.com^",
@@ -43,7 +50,6 @@ const DEFAULT_RULES = [
   "||googletagmanager.com^",
   "||adservice.google.com^",
   "||amazon-adsystem.com^",
-  "||ads.yahoo.com^",
   "||adnxs.com^",
   "||criteo.com^",
   "||criteo.net^",
@@ -57,13 +63,11 @@ const DEFAULT_RULES = [
   "||openx.net^",
   "||smartadserver.com^",
   "||adform.net^",
-  "||bing.com/bat.js",
   "||hm.baidu.com^",
   "||pos.baidu.com^",
   "||cpro.baidu.com^",
   "||cbjs.baidu.com^",
   "||eclick.baidu.com^",
-  "||union.baidu.com^",
   "||tanx.com^",
   "||mmstat.com^",
   "||cnzz.com^",
@@ -71,14 +75,10 @@ const DEFAULT_RULES = [
   "||umengcloud.com^",
   "||growingio.com^",
   "||talkingdata.com^",
-  "||adsmind.apdcdn.tc.qq.com^",
   "||gdt.qq.com^",
   "||e.qq.com^",
   "||pingjs.qq.com^",
   "||miaozhen.com^",
-  "||advertising.apple.com^",
-  "/ad-banner",
-  "/ads/banner",
   "##ins.adsbygoogle",
   "##.adsbygoogle",
   '##div[id^="div-gpt-ad"]',
@@ -86,18 +86,65 @@ const DEFAULT_RULES = [
   '##iframe[src*="googlesyndication.com"]',
 ];
 
+/** Electron's `resourceType` values mapped onto Adblock Plus type names. */
+const TYPE_ALIASES: Record<string, string> = {
+  mainFrame: "document",
+  subFrame: "subdocument",
+  stylesheet: "stylesheet",
+  script: "script",
+  image: "image",
+  font: "font",
+  object: "object",
+  xhr: "xmlhttprequest",
+  ping: "ping",
+  cspReport: "other",
+  media: "media",
+  webSocket: "websocket",
+  other: "other",
+};
+
+export type AdblockContext = {
+  url: string;
+  /** Electron resource type: script, image, mainFrame, … */
+  resourceType?: string;
+  /** Page that initiated the request, when Chromium reports it. */
+  initiator?: string;
+  /** Host of the pane's own document; used for domain-scoped rules and cosmetics. */
+  frameHost?: string;
+  frameUrl?: string;
+};
+
+type NetworkRule = {
+  block: boolean;
+  /** Host rule (`||host^`), matched against the URL host. */
+  host?: string;
+  /** Everything else is one compiled pattern over the full URL. */
+  pattern?: RegExp;
+  /** Allowed resource types; empty means every type. */
+  types?: Set<string>;
+  excludedTypes?: Set<string>;
+  /** `$domain=` restriction over the page host. */
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  /** `$third-party` / `$~third-party`. */
+  thirdParty?: boolean;
+  matchCase?: boolean;
+};
+
+type CosmeticRule = {
+  selector: string;
+  hide: boolean;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+};
+
 export type AdblockRuleSet = {
-  blockHosts: Set<string>;
-  blockPatterns: RegExp[];
-  allowHosts: Set<string>;
-  allowPatterns: RegExp[];
-  /** `##selector` rules: hidden in the page, not blocked on the wire. */
-  cosmeticSelectors: string[];
+  network: NetworkRule[];
+  cosmetic: CosmeticRule[];
 };
 
 export type AdblockStats = {
   blocked: number;
-  /** Hosts that were blocked most often, for the menu's summary. */
   topHosts: Array<{ host: string; count: number }>;
 };
 
@@ -105,7 +152,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Absolute path of the user's list. */
+/** Absolute path of the list. */
 export function adblockListPath(dataDir: string): string {
   return join(dataDir, LIST_FILE);
 }
@@ -121,378 +168,304 @@ export function ensureAdblockList(dataDir: string): string {
 }
 
 /**
- * Rewrite `adblock.txt` from `adblock-online.txt`.
+ * Compile one network rule, or `undefined` when it cannot be expressed.
  *
- * The two files answer different questions — one is what the reader wrote, the
- * other what the subscriptions currently say — and a reader who wants the
- * subscriptions to *be* the list should not have to paste five thousand lines by
- * hand. Replacing is still destructive, so:
- *
- *  - the previous file is copied to `adblock.txt.bak-<timestamp>` first;
- *  - whitelist (`@@`) and cosmetic (`##`) lines survive, because they are the only
- *    thing in this file the online report cannot carry — dropping them would
- *    silently re-enable ads the reader had exempted and stop hiding their boxes;
- *  - the header says where the body came from and when.
+ * `^` is Adblock Plus' separator — "a character that is not a letter, digit, `%`,
+ * `.` or `-`, or the end of the address" — and is translated rather than dropped,
+ * because published lists use it in almost every path rule.
  */
-export function rewriteLocalListFromOnline(dataDir: string): {
-  written: number;
-  kept: number;
-  backup?: string;
-} {
-  const listFile = ensureAdblockList(dataDir);
-  const summaryFile = join(dataDir, ONLINE_SUMMARY_FILE);
-  if (!existsSync(summaryFile)) return { written: 0, kept: 0 };
-  const summary = readFileSync(summaryFile, "utf8");
-  const online: string[] = [];
-  let stamp = new Date().toISOString();
-  for (const line of summary.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith("!")) {
-      const match = /更新时间：([^，]+)/.exec(trimmed);
-      if (match) stamp = match[1].trim();
+function compileNetworkRule(line: string, block: boolean): NetworkRule | undefined {
+  let body = line;
+  let options: string[] = [];
+  const dollar = body.lastIndexOf("$");
+  // A `$` inside a regex or after the address part is an option list; only treat
+  // it as such when it looks like one.
+  if (dollar > 0 && /^[a-z0-9_.,~=|*-]+$/i.test(body.slice(dollar + 1))) {
+    options = body
+      .slice(dollar + 1)
+      .split(",")
+      .map((option) => option.trim().toLowerCase())
+      .filter(Boolean);
+    body = body.slice(0, dollar);
+  }
+  if (!body) return undefined;
+
+  const rule: NetworkRule = { block };
+  for (const option of options) {
+    if (option === "match-case") {
+      rule.matchCase = true;
       continue;
     }
-    online.push(trimmed);
+    if (option === "third-party") {
+      rule.thirdParty = true;
+      continue;
+    }
+    if (option === "~third-party" || option === "first-party") {
+      rule.thirdParty = false;
+      continue;
+    }
+    if (option.startsWith("domain=")) {
+      const domains = option
+        .slice("domain=".length)
+        .split("|")
+        .map((domain) => domain.trim().replace(/^~/, "~").toLowerCase())
+        .filter(Boolean);
+      const include = domains.filter((domain) => !domain.startsWith("~"));
+      const exclude = domains.filter((domain) => domain.startsWith("~")).map((domain) => domain.slice(1));
+      if (include.length) rule.includeDomains = include;
+      if (exclude.length) rule.excludeDomains = exclude;
+      continue;
+    }
+    if (option === "popup" || option === "elemhide" || option === "generichide") return undefined;
+    if (option === "document") {
+      // Blocking a whole document blanks the pane, so a blocking `$document` rule
+      // is skipped rather than downgraded. A whitelisting one is the common case
+      // ("this site is fine"), and it may only apply to the document itself —
+      // otherwise a single `@@||site^$document` would unblock every tracker on it.
+      if (block) return undefined;
+      rule.types = rule.types ?? new Set();
+      rule.types.add("document");
+      continue;
+    }
+    if (option === "important") continue;
+    if (option.startsWith("~")) {
+      rule.excludedTypes = rule.excludedTypes ?? new Set();
+      rule.excludedTypes.add(option.slice(1));
+      continue;
+    }
+    if (KNOWN_TYPES.has(option)) {
+      rule.types = rule.types ?? new Set();
+      rule.types.add(option);
+      continue;
+    }
+    // Unknown option: keep the rule, ignore the option.
   }
-  if (!online.length) return { written: 0, kept: 0 };
 
-  const existing = readFileSync(listFile, "utf8");
-  const kept = existing
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("@@") || line.includes("##"));
-  const backup = `${listFile}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  // Regular expression rule.
+  if (body.length > 2 && body.startsWith("/") && body.endsWith("/")) {
+    try {
+      rule.pattern = new RegExp(body.slice(1, -1), rule.matchCase ? "" : "i");
+    } catch {
+      return undefined;
+    }
+    return rule;
+  }
+
+  // `||` anchors the *host*, not the URL: it must be consumed before looking for a
+  // single `|` URL anchor, otherwise every `||host^` rule compiles into an anchored
+  // pattern that can never match a full URL.
+  const domainAnchor = body.startsWith("||");
+  if (domainAnchor) body = body.slice(2);
+  const anchoredStart = body.startsWith("|");
+  const anchoredEnd = body.endsWith("|");
+  const core = body.replace(/^\|+/, "").replace(/\|+$/, "");
+
+  const hostOnly = /^([^/^*]+)\^?$/.exec(core);
+  if (domainAnchor && hostOnly && !anchoredStart && !anchoredEnd) {
+    const host = hostOnly[1].toLowerCase().replace(/^\.+/, "");
+    if (!host || host.includes("*") || !host.includes(".")) return undefined;
+    rule.host = host;
+    return rule;
+  }
+
+  const separator = "(?:[^\\w\\u00a0-\\u02ff\\u0370-\\u1fff\\u2000-\\u206f\\u2070-\\u2fff\\u3040-\\uffff.%-]|$)";
+  const source = core
+    .split("*")
+    .map((part) => part.split("^").map(escapeRegExp).join(separator))
+    .join(".*");
+  if (source.length < 3) return undefined;
+  const prefix = anchoredStart ? "^" : "";
+  const suffix = anchoredEnd ? "$" : "";
   try {
-    writeFileSync(backup, existing, "utf8");
+    rule.pattern = new RegExp(`${prefix}${source}${suffix}`, rule.matchCase ? "" : "i");
   } catch {
-    // no backup is a warning, not a reason to refuse the rewrite
+    return undefined;
   }
+  return rule;
+}
 
-  const body = [
-    "! PI-Desktop 广告拦截规则",
-    `! 由在线列表重写于 ${new Date().toISOString()}（在线数据时间：${stamp}）`,
-    `! 域名规则 ${online.length} 条；本文件里 @@ 白名单与 ## 元素隐藏规则在重写时保留`,
-    "! 想保留手写的路径规则（/ads/banner 这类），请写在下面这段注释之前——重写会覆盖其它内容",
-    ...kept,
-    "",
-    ...online.sort(),
-    "",
-  ].join("\n");
-  writeFileSync(listFile, body, "utf8");
-  return { written: online.length, kept: kept.length, backup };
+const KNOWN_TYPES = new Set([
+  "document",
+  "subdocument",
+  "stylesheet",
+  "script",
+  "image",
+  "font",
+  "object",
+  "xmlhttprequest",
+  "ping",
+  "media",
+  "websocket",
+  "other",
+]);
+
+/** Compile a cosmetic line (`##selector`, `site##selector`, `#@#selector`). */
+function compileCosmeticRule(line: string, hide: boolean): CosmeticRule | undefined {
+  const marker = hide ? "##" : "#@#";
+  const index = line.indexOf(marker);
+  if (index < 0) return undefined;
+  const scope = line.slice(0, index).trim().toLowerCase();
+  const selector = line.slice(index + marker.length).trim();
+  if (!selector || /[{}\\]/.test(selector)) return undefined;
+  const rule: CosmeticRule = { selector, hide };
+  if (scope) {
+    const domains = scope.split(",").map((domain) => domain.trim()).filter(Boolean);
+    const include = domains.filter((domain) => !domain.startsWith("~"));
+    const exclude = domains.filter((domain) => domain.startsWith("~")).map((domain) => domain.slice(1));
+    if (include.length) rule.includeDomains = include;
+    if (exclude.length) rule.excludeDomains = exclude;
+  }
+  return rule;
 }
 
 /**
- * Parse the list.
+ * Parse the whole list.
  *
- * Rules that cannot be expressed as a request filter are skipped rather than
- * guessed at: a cosmetic rule must not turn into a network block.
+ * An unparseable line is skipped, never approximated: a cosmetic selector must not
+ * turn into a network block, and a path rule must not decay into a host block.
  */
 export function parseAdblockRules(text: string): AdblockRuleSet {
-  const rules: AdblockRuleSet = {
-    blockHosts: new Set(),
-    blockPatterns: [],
-    allowHosts: new Set(),
-    allowPatterns: [],
-    cosmeticSelectors: [],
-  };
+  const rules: AdblockRuleSet = { network: [], cosmetic: [] };
   for (const rawLine of text.split(/\r?\n/)) {
-    let line = rawLine.trim();
+    const line = rawLine.trim();
     if (!line || line.startsWith("!") || line.startsWith("[")) continue;
-    // Cosmetic rules hide an element instead of cancelling a request. A
-    // domain-prefixed rule (`example.com##.ad`) is applied everywhere rather
-    // than risk hiding the wrong thing: the panel has one site at a time, and a
-    // silent no-op would be worse than a slightly eager hide.
-    const cosmetic = line.indexOf("##");
-    if (cosmetic >= 0) {
-      if (line.includes("#@#") || line.includes("#?#")) continue;
-      const selector = line.slice(cosmetic + 2).trim();
-      if (selector && !/[{}\\]/.test(selector)) rules.cosmeticSelectors.push(selector);
-      continue;
-    }
-    let allow = false;
-    if (line.startsWith("@@")) {
-      allow = true;
-      line = line.slice(2);
-    }
-    const dollar = line.indexOf("$");
-    if (dollar >= 0) line = line.slice(0, dollar);
-    line = line.trim();
-    if (!line) continue;
 
-    // `||domain^` — the host and every subdomain of it.
-    if (line.startsWith("||")) {
-      const body = line
-        .slice(2)
-        .split("^")[0]
-        .replace(/^\*\./, "");
-      // A path makes it an address rule, not a host rule: truncating
-      // `||zhihu.com/api/*banners/` to `zhihu.com` would block the whole site.
-      if (!body.includes("/")) {
-        const host = body.toLowerCase();
-        if (!host || /[*|]/.test(host)) continue;
-        (allow ? rules.allowHosts : rules.blockHosts).add(host);
-        continue;
-      }
-      const asPattern = body
-        .split("*")
-        .map((part) => escapeRegExp(part))
-        .join(".*");
-      if (asPattern.length < 6) continue;
-      const anchored = new RegExp(asPattern, "i");
-      (allow ? rules.allowPatterns : rules.blockPatterns).push(anchored);
+    const cosmeticIndex = line.indexOf("#@#");
+    if (cosmeticIndex >= 0) {
+      const rule = compileCosmeticRule(line, false);
+      if (rule) rules.cosmetic.push(rule);
       continue;
     }
-    // Anchored single-slash rules still work as substrings of the path.
-    const pattern = line.replace(/^\|+/, "").replace(/\|+$/, "").replace(/^\/\//, "");
-    if (pattern.length < 4) continue;
-    const body = pattern
-      .split("*")
-      .map((part) => escapeRegExp(part))
-      .join(".*");
-    const regex = new RegExp(body, "i");
-    (allow ? rules.allowPatterns : rules.blockPatterns).push(regex);
+    if (line.includes("##")) {
+      const rule = compileCosmeticRule(line, true);
+      if (rule) rules.cosmetic.push(rule);
+      continue;
+    }
+    if (line.includes("#?#")) continue;
+
+    let body = line;
+    let block = true;
+    if (body.startsWith("@@")) {
+      block = false;
+      body = body.slice(2);
+    }
+    const rule = compileNetworkRule(body, block);
+    if (rule) rules.network.push(rule);
   }
   return rules;
 }
 
-/** Read and parse the list; a missing file yields the starter rules. */
+/** Read and compile the list; a missing file yields the starter rules. */
 export function loadAdblockRules(dataDir: string): AdblockRuleSet {
   const file = ensureAdblockList(dataDir);
-  return mergeOnlineLists(dataDir, parseAdblockRules(readFileSync(file, "utf8")));
+  return parseAdblockRules(readFileSync(file, "utf8"));
+}
+
+function hostMatchesDomain(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function domainAllowed(rule: NetworkRule | CosmeticRule, pageHost: string): boolean {
+  if (rule.includeDomains?.length) {
+    if (!rule.includeDomains.some((domain) => hostMatchesDomain(pageHost, domain))) return false;
+  }
+  if (rule.excludeDomains?.length) {
+    if (rule.excludeDomains.some((domain) => hostMatchesDomain(pageHost, domain))) return false;
+  }
+  return true;
+}
+
+function typesMatch(rule: NetworkRule, type: string): boolean {
+  if (rule.types?.size && !rule.types.has(type)) return false;
+  if (rule.excludedTypes?.has(type)) return false;
+  return true;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isThirdParty(requestHost: string, pageHost: string): boolean {
+  if (!requestHost || !pageHost) return false;
+  return !hostMatchesDomain(requestHost, pageHost);
 }
 
 /**
- * CSS that hides cosmetic matches.
+ * Should this request be cancelled?
  *
- * `display: none !important` is the only property that reliably wins against a
- * page's own rules; the selectors come from the user's list and are validated in
- * the parser, so nothing here can escape the declaration block.
+ * Whitelists win: one matching `@@` rule beats any number of blocks, which is how
+ * Adblock Plus behaves and what a reader expects after adding an exception.
  */
-export function adblockCosmeticCss(rules: AdblockRuleSet): string {
-  if (!rules.cosmeticSelectors.length) return "";
-  return `${rules.cosmeticSelectors.join(",\n")} { display: none !important; }`;
-}
+export function adblockShouldBlock(
+  rules: AdblockRuleSet,
+  context: AdblockContext | string,
+  legacyPageHost?: string,
+): boolean {
+  const ctx: AdblockContext =
+    typeof context === "string" ? { url: context, frameHost: legacyPageHost } : context;
+  const url = ctx.url;
+  const host = hostOf(url);
+  if (!host) return false;
+  // The page host decides third-party and `$domain=`. Prefer the tracked
+  // main-frame host, fall back to the reported initiator, then assume first-party.
+  const pageHost = ctx.frameHost || (ctx.initiator ? hostOf(ctx.initiator) : "") || host;
+  const type = TYPE_ALIASES[ctx.resourceType ?? ""] ?? "other";
+  const thirdParty = isThirdParty(host, pageHost);
 
-/** How many online host rules are currently merged, for the menu label. */
-export function onlineRuleCount(dataDir: string): number {
-  const file = join(dataDir, ONLINE_SUMMARY_FILE);
-  if (!existsSync(file)) return 0;
-  try {
-    let count = 0;
-    for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-      if (line.trim() && !line.startsWith("!")) count += 1;
-    }
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
-/** True when the URL should be cancelled. Whitelists win. */
-export function adblockShouldBlock(rules: AdblockRuleSet, url: string): boolean {
-  let host: string;
-  let path: string;
-  try {
-    const parsed = new URL(url);
-    host = parsed.hostname.toLowerCase();
-    path = `${parsed.pathname}${parsed.search}`;
-  } catch {
-    return false;
-  }
-  const hostMatches = (set: Set<string>): boolean => {
-    for (const entry of set) {
-      if (host === entry || host.endsWith(`.${entry}`)) return true;
-    }
+  const matches = (rule: NetworkRule): boolean => {
+    if (!typesMatch(rule, type)) return false;
+    if (rule.thirdParty !== undefined && rule.thirdParty !== thirdParty) return false;
+    if (!domainAllowed(rule, pageHost)) return false;
+    if (rule.host) return hostMatchesDomain(host, rule.host);
+    if (rule.pattern) return rule.pattern.test(url);
     return false;
   };
-  if (hostMatches(rules.allowHosts)) return false;
-  const allowByPath = rules.allowPatterns.some(
-    (pattern) =>
-      pattern.test(path) || pattern.test(`${host}${path}`) || pattern.test(url),
-  );
-  if (allowByPath) return false;
-  if (hostMatches(rules.blockHosts)) return true;
-  return rules.blockPatterns.some(
-    (pattern) =>
-      pattern.test(path) || pattern.test(`${host}${path}`) || pattern.test(url),
-  );
+
+  if (rules.network.some((rule) => !rule.block && matches(rule))) return false;
+  return rules.network.some((rule) => rule.block && matches(rule));
 }
 
-type AdblockState = {
-  enabled: boolean;
-  /**
-   * Online lists to merge in, in Addition to `adblock.txt`. Only `||host^` rules
-   * are taken from them: a full EasyList is ~50k lines of path regexes, and
-   * compiling those on every load costs more than the blocking is worth. Host
-   * rules are a Set lookup and catch the bulk of ad traffic.
-   */
-  listUrls?: string[];
-  /** ISO timestamp of the last successful refresh, for the menu label. */
-  listsUpdatedAt?: string;
-};
+/** Cosmetic selectors that apply to `pageHost`, with `#@#` exceptions honoured. */
+export function adblockCosmeticSelectors(rules: AdblockRuleSet, pageHost: string): string[] {
+  const hidden = new Set<string>();
+  const exceptions = new Set<string>();
+  for (const rule of rules.cosmetic) {
+    if (!domainAllowed(rule, pageHost)) continue;
+    if (rule.hide) hidden.add(rule.selector);
+    else exceptions.add(rule.selector);
+  }
+  for (const selector of exceptions) hidden.delete(selector);
+  return [...hidden];
+}
 
-/** Persisted on/off switch; blocking is on unless the user turned it off. */
+/** CSS that hides the cosmetic matches for one page. */
+export function adblockCosmeticCss(rules: AdblockRuleSet, pageHost: string): string {
+  const selectors = adblockCosmeticSelectors(rules, pageHost);
+  if (!selectors.length) return "";
+  return `${selectors.join(",\n")} { display: none !important; }`;
+}
+
+type AdblockState = { enabled: boolean };
+
+/** Persisted on/off switch; blocking is on unless the reader turned it off. */
 export function readAdblockEnabled(dataDir: string): boolean {
-  return readAdblockSettings(dataDir).enabled;
+  const file = join(dataDir, STATE_FILE);
+  if (!existsSync(file)) return true;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<AdblockState>;
+    return parsed.enabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 export function writeAdblockEnabled(dataDir: string, enabled: boolean): void {
-  writeAdblockSettings(dataDir, { ...readAdblockSettings(dataDir), enabled });
-}
-
-/** Whole settings record: the switch, the online sources and their timestamp. */
-export function readAdblockSettings(dataDir: string): Required<Pick<AdblockState, "enabled">> &
-  Pick<AdblockState, "listUrls" | "listsUpdatedAt"> {
-  const file = join(dataDir, STATE_FILE);
-  if (!existsSync(file)) return { enabled: true };
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<AdblockState>;
-    const listUrls = Array.isArray(parsed.listUrls)
-      ? parsed.listUrls.filter((url): url is string => typeof url === "string" && /^https?:\/\//i.test(url.trim()))
-      : undefined;
-    return {
-      enabled: parsed.enabled !== false,
-      ...(listUrls?.length ? { listUrls } : {}),
-      ...(typeof parsed.listsUpdatedAt === "string" ? { listsUpdatedAt: parsed.listsUpdatedAt } : {}),
-    };
-  } catch {
-    return { enabled: true };
-  }
-}
-
-export function writeAdblockSettings(
-  dataDir: string,
-  next: Required<Pick<AdblockState, "enabled">> & Pick<AdblockState, "listUrls" | "listsUpdatedAt">,
-): void {
   mkdirSync(dataDir, { recursive: true });
-  writeFileSync(join(dataDir, STATE_FILE), `${JSON.stringify(next, null, 2)}\n`, "utf8");
-}
-
-/** Where downloaded lists are cached, one file per source URL. */
-function listCacheDir(dataDir: string): string {
-  return join(dataDir, "adblock-cache");
-}
-
-function listCacheFile(dataDir: string, url: string): string {
-  const hash = createHash("sha1").update(url).digest("hex").slice(0, 16);
-  return join(listCacheDir(dataDir), `${hash}.txt`);
-}
-
-const MAX_LIST_BYTES = 12_000_000;
-
-/**
- * Download every configured source into the cache.
- *
- * A failure of one source never discards another's cache: the caller reports
- * which URLs failed and the old copy keeps working.
- */
-export async function refreshOnlineLists(
-  dataDir: string,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
-): Promise<{ updated: number; failed: Array<{ url: string; error: string }> }> {
-  const urls = readAdblockSettings(dataDir).listUrls ?? [];
-  const failed: Array<{ url: string; error: string }> = [];
-  let updated = 0;
-  if (!urls.length) return { updated, failed };
-  const fetchImpl = options.fetchImpl ?? fetch;
-  mkdirSync(listCacheDir(dataDir), { recursive: true });
-  for (const url of urls) {
-    try {
-      const response = await fetchImpl(url, {
-        signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
-        headers: { "User-Agent": "PI-Desktop adblock" },
-      });
-      if (!response.ok) {
-        failed.push({ url, error: `HTTP ${response.status}` });
-        continue;
-      }
-      const text = await response.text();
-      if (!text.trim()) {
-        failed.push({ url, error: "empty list" });
-        continue;
-      }
-      if (text.length > MAX_LIST_BYTES) {
-        failed.push({ url, error: `list too large (${text.length} bytes)` });
-        continue;
-      }
-      writeFileSync(listCacheFile(dataDir, url), text, "utf8");
-      updated += 1;
-    } catch (error) {
-      failed.push({ url, error: (error as Error).message ?? String(error) });
-    }
-  }
-  writeAdblockSettings(dataDir, {
-    ...readAdblockSettings(dataDir),
-    listsUpdatedAt: new Date().toISOString(),
-  });
-  return { updated, failed };
-}
-
-/**
- * `||host^` rules from an online list.
- *
- * Only whole-host rules are taken. A rule with a path — `||zhihu.com/api/*banners/`
- * is one — must **not** be truncated to its host: doing that blocks the entire
- * site, which is exactly how a filter list turns a page blank. Path matching for
- * online lists is out of scope, so those lines are skipped; `$` options are
- * allowed only when they narrow resource types, never when they change the scope
- * (`$document`, `$domain=`, `$elemhide` would block documents or specific sites).
- */
-export function parseHostRules(text: string, into: Set<string>): void {
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line.startsWith("||")) continue;
-    const match = /^\|\|([^/^$#|*]+)\^?((?:\$[a-z0-9_.,~-]+)?)$/i.exec(line);
-    if (!match) continue;
-    const options = (match[2] ?? "").toLowerCase();
-    if (/document|popup|elemhide|generichide|domain=|third-party/.test(options)) continue;
-    const host = match[1].trim().toLowerCase().replace(/^\*\./, "");
-    if (!host || host.includes("*") || host.length > 253 || !host.includes(".")) continue;
-    if (host.startsWith(".") || host.endsWith(".")) continue;
-    into.add(host);
-  }
-}
-
-/**
- * Merge the cached online lists into a rule set (host rules only).
- *
- * The merged hosts are also written to `adblock-online.txt` beside the local
- * list: without that file "更新在线规则" had no visible effect, and a reader had no
- * way to tell a successful download from a silent failure.
- */
-export function mergeOnlineLists(dataDir: string, rules: AdblockRuleSet): AdblockRuleSet {
-  const dir = listCacheDir(dataDir);
-  if (!existsSync(dir)) return rules;
-  const files = readdirSync(dir).filter((name) => name.endsWith(".txt"));
-  if (!files.length) return rules;
-  const online = new Set<string>();
-  for (const name of files) {
-    try {
-      parseHostRules(readFileSync(join(dir, name), "utf8"), online);
-    } catch {
-      // a corrupt cache entry must not stop the local list from working
-    }
-  }
-  for (const host of online) rules.blockHosts.add(host);
-  try {
-    const summary = join(dataDir, ONLINE_SUMMARY_FILE);
-    const stamp = readAdblockSettings(dataDir).listsUpdatedAt ?? new Date().toISOString();
-    writeFileSync(
-      summary,
-      [
-        `! 由在线规则合并生成，供查看；修改请改 adblock.txt 或 adblock.json 的 listUrls`,
-        `! 更新时间：${stamp}，域名规则：${online.size} 条（在线列表只取整域名规则）`,
-        ...[...online].sort(),
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-  } catch {
-    // the summary is a convenience; failing to write it must not break blocking
-  }
-  return rules;
+  writeFileSync(join(dataDir, STATE_FILE), `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
 }
 
 /** Counters for the page menu; one instance per session. */
@@ -521,20 +494,23 @@ export type AdblockRuntime = ReturnType<typeof createAdblockRuntime>;
 /**
  * Install the blocker on a session.
  *
- * `webRequest` allows one listener per event per session, so this must be called
- * once for the browser partition and never per view. Rules are re-read on each
- * navigation's first request via the resolver, which lets the menu reload an
- * edited list without recreating the session.
+ * `webRequest` allows one listener per event per session, so this must run once for
+ * the browser partition, never per view. The page host is tracked from main-frame
+ * requests, which is what makes `$domain=`, third-party and domain-scoped cosmetic
+ * rules behave.
  */
 export function installAdblock(
   session: Session,
   resolve: () => { enabled: boolean; rules: AdblockRuleSet },
   runtime: AdblockRuntime,
 ): void {
+  const frameHosts = new Map<number, string>();
   session.webRequest.onBeforeRequest(
     { urls: ["http://*/*", "https://*/*"] },
     (details, callback) => {
+      const host = hostOf(details.url);
       if (details.resourceType === "mainFrame") {
+        frameHosts.set(details.webContentsId ?? -1, host);
         runtime.reset();
         callback({});
         return;
@@ -544,14 +520,19 @@ export function installAdblock(
         callback({});
         return;
       }
-      try {
-        if (adblockShouldBlock(rules, details.url)) {
-          runtime.note(new URL(details.url).hostname);
-          callback({ cancel: true });
-          return;
-        }
-      } catch {
-        // a malformed URL is not worth blocking
+      // Chromium reports the initiating page on some (not all) builds and it is
+      // absent from Electron's typings; the tracked main-frame host covers the rest.
+      const initiator = (details as { initiator?: string }).initiator;
+      const frameHost = frameHosts.get(details.webContentsId ?? -1) ?? hostOf(initiator ?? "");
+      if (adblockShouldBlock(rules, {
+        url: details.url,
+        resourceType: details.resourceType,
+        ...(initiator ? { initiator } : {}),
+        frameHost,
+      })) {
+        runtime.note(host);
+        callback({ cancel: true });
+        return;
       }
       callback({});
     },
