@@ -122,7 +122,11 @@ import {
 import { desktopDataDir } from "./data-paths";
 import { McpServerClient, type McpServerClientOptions } from "./plugin-mcp";
 import { PluginToolInvocations, type PluginToolInvocation } from "./plugin-tool-invocations";
+import { homedir } from "node:os";
 import { pluginWorkspaceForCall, pluginWorkspacePath } from "./plugin-workspace-context";
+
+/** 没有项目时以用户主目录为根、并且只影响宿主 fs.* 解析的插件。 */
+const HOME_FS_ROOT_PLUGINS = new Set(["pi.file-manager"]);
 import { McpCallRegistry } from "./mcp-call-registry";
 import {
   RendererCallRelay,
@@ -5317,7 +5321,14 @@ export class PluginRuntime {
   private fsRoot(loaded: LoadedPlugin, rule: PluginFsRule): string | null {
     if (rule.root === "userSelected") return loaded.userRoot ?? null;
     const sessionId = this.inFlightTool(loaded.manifest.id)?.sessionId.trim() || undefined;
-    return pluginWorkspacePath(this.services, sessionId);
+    const workspace = pluginWorkspacePath(this.services, sessionId);
+    if (workspace) return workspace;
+    // With no project open, the file manager still browses the home folder (its own
+    // root resolves there), so the host-side OS actions it offers — open with the
+    // default app, reveal in Explorer — must resolve against the same place instead
+    // of failing with "No workspace is open". Deliberately not `workspace.get`: that
+    // answer drives the view's identity, and changing it produces WORKSPACE_CHANGED.
+    return HOME_FS_ROOT_PLUGINS.has(loaded.manifest.id) ? homedir() : null;
   }
 
   private remoteFsRead(loaded: LoadedPlugin, operation: "list" | "preview", ref: string, options?: PluginFsReadOptions) {
