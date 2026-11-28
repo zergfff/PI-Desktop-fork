@@ -117,6 +117,7 @@ import {
   IconBranch,
   IconCheck,
   IconChevronDown,
+  IconChevronUp,
   IconCopy,
   IconCircleAlert,
   IconNewSession,
@@ -1228,6 +1229,17 @@ export function Sidebar({
         updateProjectSessionExpansion(previous, normalized, false),
       );
     }
+  };
+
+  /** Every project group at once, so a long sidebar folds in one click (#2584). */
+  const allProjectsCollapsed =
+    projectEntries.length > 0 &&
+    projectEntries.every(
+      (entry) => entry.meta.collapsed ?? projectCollapsed[entry.key] ?? false,
+    );
+  const toggleAllProjects = () => {
+    const next = !allProjectsCollapsed;
+    for (const entry of projectEntries) setCollapsed(entry.path, next);
   };
 
   const setSort = (next: SessionSort) => {
@@ -2713,6 +2725,23 @@ export function Sidebar({
               }}
             >
               <span className="sidebar-list-label">{t("nav.projects")}</span>
+              {projectEntries.length > 0 ? (
+                <TooltipButton
+                  type="button"
+                  className="sidebar-toolbar-button"
+                  data-action="toggle-projects"
+                  tooltip={allProjectsCollapsed
+                    ? t("nav.expandProjects", { defaultValue: "展开全部项目" })
+                    : t("nav.collapseProjects", { defaultValue: "收起全部项目" })}
+                  ariaLabel={allProjectsCollapsed
+                    ? t("nav.expandProjects", { defaultValue: "展开全部项目" })
+                    : t("nav.collapseProjects", { defaultValue: "收起全部项目" })}
+                  aria-pressed={allProjectsCollapsed}
+                  onClick={toggleAllProjects}
+                >
+                  {allProjectsCollapsed ? <IconChevronDown size={14} /> : <IconChevronUp size={14} />}
+                </TooltipButton>
+              ) : null}
               {showNewProject ? (
                 <TooltipButton
                   type="button"

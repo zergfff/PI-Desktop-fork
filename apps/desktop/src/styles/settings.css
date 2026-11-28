@@ -4367,3 +4367,22 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* 设置页里的原生下拉：跟随主题的系统色，避免弹出列表白底白字。 */
+.settings-select {
+  min-width: 140px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  color-scheme: inherit;
+}
+
+.settings-select option {
+  background-color: Canvas;
+  color: CanvasText;
+}

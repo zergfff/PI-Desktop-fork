@@ -27,6 +27,10 @@ import {
   toolWorkPanelTab,
 } from "../../lib/work-panel-tabs";
 import type { PluginViewMeta } from "@pi-desktop/shared";
+import {
+  defaultWorkPanelTab,
+  readDefaultWorkPanelTab,
+} from "../../lib/work-panel-default-tab";
 import { api } from "../../lib/api";
 import { pluginViewIcon, pluginViewInitial } from "../../lib/plugin-view-icons";
 import { useAppStore } from "../../stores/app-store";
@@ -234,6 +238,18 @@ function LocalWorkPanel({
   const reorderTabs = useAppStore((s) => s.reorderWorkPanelTabs);
   const closeTab = useAppStore((s) => s.closeWorkPanelTab);
   const openWorkPanelTab = useAppStore((s) => s.openWorkPanelTab);
+  // #2573: a configured default tab replaces the launcher page for a fresh panel.
+  const defaultTabOpenedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (tabs.length > 0) return;
+    const preference = readDefaultWorkPanelTab();
+    const tab = defaultWorkPanelTab(preference);
+    if (!tab) return;
+    const scope = `${activeSessionId ?? "none"}|${preference}`;
+    if (defaultTabOpenedRef.current === scope) return;
+    defaultTabOpenedRef.current = scope;
+    openWorkPanelTab(tab);
+  }, [activeSessionId, openWorkPanelTab, tabs.length]);
   const closeOtherTabs = useAppStore((s) => s.closeOtherWorkPanelTabs);
   const closeAllTabs = useAppStore((s) => s.closeAllWorkPanelTabs);
   const openNewWorkPanelTab = useAppStore((s) => s.openNewWorkPanelTab);

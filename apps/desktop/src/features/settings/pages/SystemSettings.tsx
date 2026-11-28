@@ -15,6 +15,7 @@ import { SettingsCard, SettingsRow } from "../primitives";
 import { StorageSettingsSection } from "../StorageSettingsSection";
 import { BrowserSettingsSection } from "../BrowserSettingsSection";
 import { PluginSettingsSection } from "../PluginSettingsSection";
+import { WorkPanelSettingsSection } from "../WorkPanelSettingsSection";
 
 export function SystemSettings({
   settings,
@@ -35,6 +36,8 @@ export function SystemSettings({
       <BrowserSettingsSection />
 
       <PluginSettingsSection />
+
+      <WorkPanelSettingsSection />
 
       <SettingsCard title={t("settings.power")}>
         <SettingsRow

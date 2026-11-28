@@ -258,17 +258,20 @@ export function useTranscriptScroll({
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    el.addEventListener("wheel", markScrollGesture, { passive: true });
-    el.addEventListener("touchstart", markScrollGesture, { passive: true });
-    el.addEventListener("touchmove", markScrollGesture, { passive: true });
-    el.addEventListener("pointerdown", markScrollGesture, { passive: true });
-    el.addEventListener("keydown", markScrollGesture, { passive: true });
+    // Capture, not bubble (#2546): a disclosure that owns its own scroller can
+    // stop a wheel before it reaches this element, and the transcript then keeps
+    // its hold and refuses to move — the reader sees a stuck viewport.
+    el.addEventListener("wheel", markScrollGesture, { passive: true, capture: true });
+    el.addEventListener("touchstart", markScrollGesture, { passive: true, capture: true });
+    el.addEventListener("touchmove", markScrollGesture, { passive: true, capture: true });
+    el.addEventListener("pointerdown", markScrollGesture, { passive: true, capture: true });
+    el.addEventListener("keydown", markScrollGesture, { passive: true, capture: true });
     return () => {
-      el.removeEventListener("wheel", markScrollGesture);
-      el.removeEventListener("touchstart", markScrollGesture);
-      el.removeEventListener("touchmove", markScrollGesture);
-      el.removeEventListener("pointerdown", markScrollGesture);
-      el.removeEventListener("keydown", markScrollGesture);
+      el.removeEventListener("wheel", markScrollGesture, true);
+      el.removeEventListener("touchstart", markScrollGesture, true);
+      el.removeEventListener("touchmove", markScrollGesture, true);
+      el.removeEventListener("pointerdown", markScrollGesture, true);
+      el.removeEventListener("keydown", markScrollGesture, true);
     };
   }, [markScrollGesture]);
 
