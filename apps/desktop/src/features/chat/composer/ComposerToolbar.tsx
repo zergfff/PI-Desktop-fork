@@ -61,8 +61,10 @@ export type ComposerToolbarProps = {
   sendBlocked: boolean;
   composerTransforms: PluginComposerTransformMeta[];
   activeTransformKey: string | null;
+  stickyTransformKey: string | null;
+  onToggleTransform: (transform: PluginComposerTransformMeta) => void;
   undoTransform: PluginComposerTransformMeta | null;
-  runComposerTransform: (transform: PluginComposerTransformMeta) => Promise<void>;
+  runComposerTransform: (transform: PluginComposerTransformMeta) => Promise<boolean>;
   undoComposerTransform: () => void;
   runActive: boolean;
   hasDraftContent: boolean;
@@ -103,6 +105,8 @@ export function ComposerToolbar({
   sendBlocked,
   composerTransforms,
   activeTransformKey,
+  stickyTransformKey,
+  onToggleTransform,
   undoTransform,
   runComposerTransform,
   undoComposerTransform,
@@ -209,23 +213,22 @@ export function ComposerToolbar({
         {composerTransforms.map((transform) => {
           const key = `${transform.pluginId}/${transform.id}`;
           const isActive = activeTransformKey === key;
+          const isArmed = stickyTransformKey === key;
           return (
           <TooltipButton
             key={key}
             type="button"
-            className={`icon-btn icon-btn-square composer-plugin-transform-btn${isActive ? " is-loading" : ""}`}
-            tooltip={transform.title}
-            ariaLabel={transform.title}
-            aria-busy={isActive}
-            disabled={
-              !value.trim() ||
-              value.trim().startsWith("/") ||
-              controlsBlocked ||
-              sendBlocked ||
-              pasting ||
-              activeTransformKey !== null
+            className={`icon-btn icon-btn-square composer-plugin-transform-btn${isActive ? " is-loading" : ""}${isArmed ? " is-armed" : ""}`}
+            tooltip={
+              isArmed
+                ? `${transform.title}${t("chat.transformArmedSuffix", { defaultValue: " · 已开启（点击关闭）" })}`
+                : transform.title
             }
-            onClick={() => void runComposerTransform(transform)}
+            ariaLabel={transform.title}
+            aria-pressed={isArmed}
+            aria-busy={isActive}
+            disabled={controlsBlocked || activeTransformKey !== null}
+            onClick={() => onToggleTransform(transform)}
           >
             {isActive ? <span className="tool-spinner" aria-hidden="true" /> : <IconSparkles size={15} aria-hidden="true" />}
           </TooltipButton>

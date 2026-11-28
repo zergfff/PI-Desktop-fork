@@ -24,10 +24,25 @@ type UndoState = {
 export type ComposerTransformController = {
   activeTransformKey: string | null;
   undo: UndoState | null;
+  /** A transform the user switched on; every send runs it first. */
+  stickyKey: string | null;
+  toggleSticky: (transform: PluginComposerTransformMeta) => void;
+  /** Run the armed transform on the live draft; false when nothing changed. */
+  runSticky: () => Promise<boolean>;
   invalidate: () => void;
-  run: (transform: PluginComposerTransformMeta) => Promise<void>;
+  run: (transform: PluginComposerTransformMeta) => Promise<boolean>;
   undoLast: () => void;
 };
+
+const STICKY_TRANSFORM_KEY = "pi.composer.stickyTransform";
+
+function readStickyKey(): string | null {
+  try {
+    return window.localStorage.getItem(STICKY_TRANSFORM_KEY);
+  } catch {
+    return null;
+  }
+}
 
 export function composerTransformKey(
   transform: Pick<PluginComposerTransformMeta, "pluginId" | "id">,
@@ -61,6 +76,7 @@ export function useComposerTransforms(options: {
   } = options;
   const [activeTransformKey, setActiveTransformKey] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoState | null>(null);
+  const [stickyKey, setStickyKey] = useState<string | null>(() => readStickyKey());
   const versionRef = useRef(0);
   const requestRef = useRef<symbol | null>(null);
   const transformsRef = useRef(transforms);
@@ -81,13 +97,25 @@ export function useComposerTransforms(options: {
     [],
   );
 
-  const run = async (transform: PluginComposerTransformMeta) => {
+  const toggleSticky = (transform: PluginComposerTransformMeta) => {
+    const key = composerTransformKey(transform);
+    const next = stickyKey === key ? null : key;
+    setStickyKey(next);
+    try {
+      if (next) window.localStorage.setItem(STICKY_TRANSFORM_KEY, next);
+      else window.localStorage.removeItem(STICKY_TRANSFORM_KEY);
+    } catch {
+      /* 存不下就只在本次运行有效 */
+    }
+  };
+
+  const run = async (transform: PluginComposerTransformMeta): Promise<boolean> => {
     const sourceText = value;
     const sourceSessionId = activeSessionId;
     const text = stripInlineComposerFileReferenceTokens(sourceText, activeFileReferences);
     const key = composerTransformKey(transform);
-    if (!text.trim() || text.trim().startsWith("/") || sendBlocked || requestRef.current) return;
-    if (!transformsRef.current.some((candidate) => composerTransformKey(candidate) === key)) return;
+    if (!text.trim() || text.trim().startsWith("/") || sendBlocked || requestRef.current) return false;
+    if (!transformsRef.current.some((candidate) => composerTransformKey(candidate) === key)) return false;
 
     const sourceDraftKey = draftKey;
     const sourceVersion = versionRef.current;
@@ -110,7 +138,7 @@ export function useComposerTransforms(options: {
         versionRef.current !== sourceVersion ||
         !transformsRef.current.some((candidate) => composerTransformKey(candidate) === key)
       ) {
-        return;
+        return false;
       }
       const transformedText = result.trim();
       if (
@@ -136,6 +164,7 @@ export function useComposerTransforms(options: {
         element.focus();
         setEditorCaret(element, nextText.length);
       });
+      return true;
     } catch (error) {
       const currentSessionId = useAppStore.getState().activeSessionId;
       if (
@@ -145,16 +174,28 @@ export function useComposerTransforms(options: {
         versionRef.current !== sourceVersion ||
         !transformsRef.current.some((candidate) => composerTransformKey(candidate) === key)
       ) {
-        return;
+        return false;
       }
       const message = error instanceof Error ? error.message : String(error);
       showToast(`${transform.pluginName}: ${message}`, { variant: "error" });
+      return false;
     } finally {
       if (requestRef.current === requestToken) {
         requestRef.current = null;
         setActiveTransformKey(null);
       }
     }
+  };
+
+  /** Send-time hook: silently rewrite the draft with the armed transform. */
+  const runSticky = async (): Promise<boolean> => {
+    const key = stickyKey;
+    if (!key) return true;
+    const transform = transformsRef.current.find(
+      (candidate) => composerTransformKey(candidate) === key,
+    );
+    if (!transform) return true;
+    return run(transform);
   };
 
   const undoLast = () => {
@@ -171,5 +212,5 @@ export function useComposerTransforms(options: {
     });
   };
 
-  return { activeTransformKey, undo, invalidate, run, undoLast };
+  return { activeTransformKey, undo, stickyKey, toggleSticky, runSticky, invalidate, run, undoLast };
 }

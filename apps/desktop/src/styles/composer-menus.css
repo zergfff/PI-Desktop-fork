@@ -1002,3 +1002,25 @@
   flex: 0 0 auto;
   margin-left: auto;
 }
+
+/* 「增强提示词」是开关，不是一次性按钮：开启时整块反色，
+   一眼能看出后面的每次发送都会先改写；关掉恢复原图标。
+   强调色在单色主题里就是白色，所以这里直接按主题取反色，保证对比度。 */
+html[data-theme="dark"] .composer-plugin-transform-btn.is-armed,
+html[data-theme="dark"] .composer-plugin-transform-btn.is-armed:hover {
+  background: #f5f5f5 !important;
+  border-color: transparent;
+  color: #141414 !important;
+}
+
+html[data-theme="light"] .composer-plugin-transform-btn.is-armed,
+html[data-theme="light"] .composer-plugin-transform-btn.is-armed:hover {
+  background: #141414 !important;
+  border-color: transparent;
+  color: #fafafa !important;
+}
+
+.composer-plugin-transform-btn.is-armed svg {
+  color: inherit;
+  stroke: currentColor;
+}

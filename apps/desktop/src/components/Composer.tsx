@@ -477,8 +477,15 @@ export function Composer({
 
   // Both submit entry points (the composer's Enter and the toolbar's Send)
   // leave history browsing before the draft is cleared.
-  const submitFromComposer = (steering?: boolean) => {
+  const submitFromComposer = async (steering?: boolean) => {
     inputHistory.exitBrowsing();
+    // An armed transform runs on the way out: the user turns "enhance" on once,
+    // and every send from then on is rewritten first. `submit` reads the live
+    // editor, so it sees the rewritten draft with no extra plumbing.
+    if (!steering && composerTransformController.stickyKey) {
+      const transformed = await composerTransformController.runSticky();
+      if (!transformed) return;
+    }
     return submit(steering);
   };
 
@@ -662,6 +669,8 @@ export function Composer({
             sendBlocked={sendBlocked}
             composerTransforms={composerTransforms}
             activeTransformKey={composerTransformController.activeTransformKey}
+            stickyTransformKey={composerTransformController.stickyKey}
+            onToggleTransform={composerTransformController.toggleSticky}
             undoTransform={composerTransformController.undo?.transform ?? null}
             runComposerTransform={composerTransformController.run}
             undoComposerTransform={composerTransformController.undoLast}

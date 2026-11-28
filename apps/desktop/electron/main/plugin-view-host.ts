@@ -60,6 +60,14 @@ export { PLUGIN_VIEW_LOCATION_EVENT, PLUGIN_VIEW_LOCATION_PARAM, viewEntryUrl };
 /** Live views kept warm; the least recently shown one is evicted past this. */
 const MAX_LIVE_VIEWS = 4;
 
+/** System colours for platform-drawn controls, injected into every plugin view. */
+const PLUGIN_VIEW_READABLE_CSS = `
+select option, datalist option, option {
+  background-color: Canvas;
+  color: CanvasText;
+}
+`;
+
 export type PluginViewOpenRequest = {
   pluginId: string;
   viewId: string;
@@ -282,6 +290,11 @@ export class PluginViewHost {
     view.webContents.once("destroyed", () => this.senders.release(senderId));
     view.webContents.once("did-finish-load", () => {
       entry.loaded = true;
+      // Native <select> popups are drawn by the platform and several of them
+      // ignore the option's own colours: a dark page produced a white list with
+      // white labels. Canvas/CanvasText are the system colours, so they follow
+      // whatever color-scheme the page declared and stay readable in both themes.
+      void view.webContents.insertCSS(PLUGIN_VIEW_READABLE_CSS).catch(() => {});
       this.deliverSelection(entry);
     });
     this.load(entry);
