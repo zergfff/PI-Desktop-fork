@@ -47,6 +47,26 @@ const PARTITION = "persist:work-browser";
  * installs once and re-reads the user's list on demand.
  */
 const adblockRuntime = createAdblockRuntime();
+
+// 浏览器设置（工具栏那个齿轮）用的四个动作。放在这里是因为 adblock 目录、
+// 下载目录和名单文件都归这个模块管；runtime 只负责转发。
+export function browserAdblockState(): { enabled: boolean } {
+  return { enabled: readAdblockEnabled(adblockDir()) };
+}
+
+export function setBrowserAdblock(enabled: boolean): { enabled: boolean } {
+  writeAdblockEnabled(adblockDir(), enabled);
+  reloadAdblockRules();
+  return { enabled: readAdblockEnabled(adblockDir()) };
+}
+
+export function openBrowserAdblockRules(): void {
+  void shell.openPath(ensureAdblockList(adblockDir()));
+}
+
+export function openBrowserDownloadsFolder(): void {
+  void shell.openPath(activeDownloadsDir());
+}
 const adblockSessions = new WeakSet<object>();
 let adblockRules: AdblockRuleSet | null = null;
 
@@ -889,20 +909,8 @@ export class BrowserPane {
       { type: "separator" },
       { label: label("在页面中查找", "Find on page"), accelerator: "CommandOrControl+F", click: () => void this.openFind(wc) },
       { type: "separator" },
-      {
-        label: label("拦截广告", "Block ads"),
-        type: "checkbox",
-        checked: readAdblockEnabled(adblockDir()),
-        click: (item) => {
-          writeAdblockEnabled(adblockDir(), item.checked);
-          reloadAdblockRules();
-          if (!wc.isDestroyed()) wc.reload();
-        },
-      },
-      {
-        label: label("编辑拦截规则…", "Edit block list…"),
-        click: () => void shell.openPath(ensureAdblockList(adblockDir())),
-      },
+      // 广告拦截与下载文件夹的开关不再挂在页面右键菜单上：它们是浏览器级设置，
+      // 现在统一在顶部工具栏的设置按钮里（见 views/browser.html）。
       {
         label: label("在新标签页打开", "Open in new tab"),
         enabled: Boolean(this.onNewTab) && isAllowedHttpUrl(wc.getURL()),
@@ -917,14 +925,6 @@ export class BrowserPane {
         click: () => {
           if (!wc.isDestroyed()) wc.openDevTools({ mode: "detach" });
         },
-      },
-      {
-        label: label("更改下载文件夹…", "Change download folder…"),
-        click: () => void downloadRegistry.chooseDirectory(),
-      },
-      {
-        label: label("打开下载目录", "Open downloads folder"),
-        click: () => void shell.openPath(activeDownloadsDir()),
       },
       // Extension loading is gone on purpose: Electron hands a Manifest V3
       // blocker its declarativeNetRequest permission and then never enforces the

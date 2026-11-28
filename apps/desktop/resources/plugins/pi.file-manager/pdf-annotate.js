@@ -134,4 +134,44 @@ async function writeFileAtomicBytes(abs, bytes, mode) {
   }
 }
 
-module.exports = { appendAnnotations, writeFileAtomicBytes };
+/**
+ * 读回文件里的标注，按视图的坐标系（页面比例、左上原点）返回。
+ *
+ * 这样即使查看器自己的注释层没画出来，界面也能把"已经保存的字句"显示成叠加层——
+ * 用户点过保存却看不到任何变化，是最糟的反馈。
+ */
+async function readAnnotations(bytes) {
+  const doc = await PDFDocument.load(bytes, { updateMetadata: false, throwOnInvalidObject: false });
+  const pages = doc.getPages();
+  const kindOf = { Highlight: "highlight", Underline: "underline", StrikeOut: "strike" };
+  const marks = [];
+  pages.forEach((page, index) => {
+    const annots = page.node.get(PDFName.of("Annots"));
+    if (!(annots instanceof PDFArray)) return;
+    const { width, height } = page.getSize();
+    annots.asArray().forEach((ref) => {
+      const annot = doc.context.lookup(ref);
+      if (!annot || typeof annot.get !== "function") return;
+      const subtype = annot.get(PDFName.of("Subtype"));
+      const kind = kindOf[String(subtype ?? "").replace("/", "")];
+      if (!kind) return;
+      const quads = annot.get(PDFName.of("QuadPoints"));
+      if (!(quads instanceof PDFArray)) return;
+      const numbers = quads.asArray().map((value) => Number(value)).filter((value) => Number.isFinite(value));
+      const rects = [];
+      for (let i = 0; i + 7 < numbers.length; i += 8) {
+        const [x0, yTop, x1, , , , , yBottom] = numbers.slice(i, i + 8);
+        rects.push({
+          x0: x0 / width,
+          y0: (height - yTop) / height,
+          x1: x1 / width,
+          y1: (height - yBottom) / height,
+        });
+      }
+      if (rects.length > 0) marks.push({ page: index + 1, kind, rects });
+    });
+  });
+  return marks;
+}
+
+module.exports = { appendAnnotations, readAnnotations, writeFileAtomicBytes };

@@ -43,7 +43,7 @@ const fs = require("node:fs/promises");
 const zlib = require("node:zlib");
 const path = require("node:path");
 const { isRemoteWorkspace, invokeRemote } = require("./remote-workspace.js");
-const { appendAnnotations, writeFileAtomicBytes } = require("./pdf-annotate.js");
+const { appendAnnotations, readAnnotations, writeFileAtomicBytes } = require("./pdf-annotate.js");
 const { draftStore } = require("./pdf-drafts.js");
 const { OFFICE_EXTENSIONS, convertOfficeToPdf } = require("./office-convert.js");
 
@@ -2496,6 +2496,19 @@ const pdfDraftStore = () => {
   return pdfDrafts;
 };
 
+/** 文件里已有的标注（视图用它把"保存过的东西"画出来）。 */
+async function handlePdfAnnotations(payload) {
+  const relPath = typeof payload?.path === "string" ? payload.path : "";
+  if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
+  const { abs } = await resolveInsideRoot(relPath, { mode: "read" });
+  if (!/\.pdf$/i.test(abs)) return { ok: true, marks: [] };
+  const stat = await fs.stat(abs).catch(() => null);
+  if (!stat || stat.size > MAX_PDF_ANNOTATE_BYTES) return { ok: true, marks: [] };
+  const bytes = await fs.readFile(abs);
+  const marks = await readAnnotations(bytes).catch(() => []);
+  return { ok: true, marks };
+}
+
 async function handlePdfDraft(payload) {
   const relPath = typeof payload?.path === "string" ? payload.path : "";
   if (!relPath) throw fail("INVALID_ARGUMENT", "path is required");
@@ -4122,6 +4135,7 @@ const CHANNELS = {
   "fm.root": handleRoot,
   "fm.setRoot": handleSetRoot,
   "fm.pdf.annotate": handlePdfAnnotate,
+  "fm.pdf.annotations": handlePdfAnnotations,
   "fm.pdf.draft": handlePdfDraft,
   "fm.pdf.stage": handlePdfStage,
   "fm.pdf.commit": handlePdfCommit,

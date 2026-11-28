@@ -141,11 +141,12 @@
 
   // ── 未保存的标注：先画在页面上，点保存才写进文件 ──────────────────────────
   let pending = [];
+  // 文件里已经有的标注：只画出来，不算"未保存"。
+  let savedMarks = [];
 
   const paint = () => {
     for (const node of Array.from(document.querySelectorAll(".pi-annot"))) node.remove();
-    if (pending.length === 0) return;
-    for (const op of pending) {
+    for (const op of [...savedMarks, ...pending]) {
       const page = document.querySelector(`.page[data-page-number="${op.page}"]`);
       if (!page) continue;
       for (const rect of op.rects ?? []) {
@@ -184,6 +185,11 @@
     pending = Array.isArray(ops) ? ops : [];
     paint();
     syncBar();
+  };
+
+  const setSavedMarks = (ops) => {
+    savedMarks = Array.isArray(ops) ? ops : [];
+    paint();
   };
 
   const reload = () => window.location.reload();
@@ -246,6 +252,13 @@
 
   // 打开时把草稿读回来：上次没保存的标注还画在页面上。
   if (isPreview && currentPath) {
+    // 先画文件里已经保存的标注（查看器的注释层不一定把 Highlight 画出来），再叠草稿。
+    bridge
+      .invoke("fm.pdf.annotations", { path: currentPath })
+      .then((result) => {
+        if (result && Array.isArray(result.marks)) setSavedMarks(result.marks);
+      })
+      .catch(() => {});
     bridge
       .invoke("fm.pdf.draft", { path: currentPath })
       .then((result) => {

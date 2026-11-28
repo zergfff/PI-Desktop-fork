@@ -137,6 +137,12 @@ import { DevPluginWatcher, type DevPluginWatcherDeps } from "./plugin-watcher";
 import { parseAllowedExternalUrl } from "./safe-open-external";
 import type { PluginAppearance } from "../shared/plugin-panel-chrome";
 import { downloadRegistry } from "./browser-downloads";
+import {
+  browserAdblockState,
+  openBrowserAdblockRules,
+  openBrowserDownloadsFolder,
+  setBrowserAdblock,
+} from "./browser-view";
 import type { McpControlController, McpControlInvokeInput } from "./mcp-control";
 import {
   PluginSocketError,
@@ -682,6 +688,10 @@ const HOST_API_ALLOWLIST = new Set([
   "browser.getState",
   "browser.cancelDownload",
   "browser.chooseDownloadFolder",
+  "browser.openDownloadsFolder",
+  "browser.adblockState",
+  "browser.setAdblock",
+  "browser.openAdblockRules",
   "browser.openExternal",
   "browser.snapshot",
   "browser.screenshot",
@@ -2738,6 +2748,14 @@ export class PluginRuntime {
         return this.invokeBrowser(loaded, "cancelDownload", payload);
       case "browser.chooseDownloadFolder":
         return this.invokeBrowser(loaded, "chooseDownloadFolder", payload);
+      case "browser.openDownloadsFolder":
+        return this.invokeBrowser(loaded, "openDownloadsFolder", payload);
+      case "browser.adblockState":
+        return this.invokeBrowser(loaded, "adblockState", payload);
+      case "browser.setAdblock":
+        return this.invokeBrowser(loaded, "setAdblock", payload);
+      case "browser.openAdblockRules":
+        return this.invokeBrowser(loaded, "openAdblockRules", payload);
       case "browser.openExternal":
         return this.invokeBrowser(loaded, "openExternal", payload);
       case "browser.snapshot":
@@ -5047,6 +5065,14 @@ export class PluginRuntime {
         return api.cancelDownload({ id: payload?.id });
       case "chooseDownloadFolder":
         return api.chooseDownloadFolder();
+      case "openDownloadsFolder":
+        return api.openDownloadsFolder();
+      case "adblockState":
+        return api.adblockState();
+      case "setAdblock":
+        return api.setAdblock({ enabled: payload?.enabled });
+      case "openAdblockRules":
+        return api.openAdblockRules();
       case "navigate":
         return api.navigate({
           url: payload?.url != null ? String(payload.url) : undefined,
@@ -6767,6 +6793,24 @@ export class PluginRuntime {
           this.assertPermission(loaded, "browser.cdp");
           const directory = await downloadRegistry.chooseDirectory();
           return { directory };
+        },
+        openDownloadsFolder: async () => {
+          this.assertPermission(loaded, "browser.cdp");
+          openBrowserDownloadsFolder();
+          return { ok: true };
+        },
+        adblockState: async () => {
+          this.assertPermission(loaded, "browser.cdp");
+          return browserAdblockState();
+        },
+        setAdblock: async (input: { enabled?: unknown } = {}) => {
+          this.assertPermission(loaded, "browser.cdp");
+          return setBrowserAdblock(input.enabled === true);
+        },
+        openAdblockRules: async () => {
+          this.assertPermission(loaded, "browser.cdp");
+          openBrowserAdblockRules();
+          return { ok: true };
         },
         reveal: async () => {
           this.assertPermission(loaded, "browser.cdp");
