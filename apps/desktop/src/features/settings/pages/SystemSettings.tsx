@@ -14,6 +14,7 @@ import { CloseBehaviorSection } from "../developer-sections";
 import { SettingsCard, SettingsRow } from "../primitives";
 import { StorageSettingsSection } from "../StorageSettingsSection";
 import { BrowserSettingsSection } from "../BrowserSettingsSection";
+import { PluginSettingsSection } from "../PluginSettingsSection";
 
 export function SystemSettings({
   settings,
@@ -32,6 +33,8 @@ export function SystemSettings({
       <StorageSettingsSection />
 
       <BrowserSettingsSection />
+
+      <PluginSettingsSection />
 
       <SettingsCard title={t("settings.power")}>
         <SettingsRow
