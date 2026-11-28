@@ -157,34 +157,6 @@
       }
       .dl-pop[hidden] { display: none; }
 
-      .settings { position: relative; display: flex; }
-      .set-pop {
-        position: absolute;
-        top: 30px;
-        right: 0;
-        z-index: 20;
-        min-width: 190px;
-        padding: 4px;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
-        border-radius: 8px;
-        background: var(--card, #1f1f22);
-        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
-      }
-      .set-pop[hidden] { display: none; }
-      .set-pop button {
-        padding: 6px 9px;
-        border: 0;
-        border-radius: 6px;
-        background: transparent;
-        color: var(--foreground, #e6e6e6);
-        font: inherit;
-        font-size: 12px;
-        text-align: left;
-        cursor: pointer;
-      }
-      .set-pop button:hover { background: var(--accent, rgba(128, 128, 128, 0.2)); }
       .dl-head {
         display: flex;
         align-items: center;
@@ -263,16 +235,6 @@
             <div id="dl-list"><div class="dl-empty">还没有下载</div></div>
           </div>
         </div>
-        <div class="settings">
-          <button type="button" class="icon-btn" id="settings" title="设置" aria-label="设置">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.11a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.49 1z"/></svg>
-          </button>
-          <div class="set-pop" id="set-pop" hidden>
-            <button type="button" id="set-folder">更改下载文件夹…</button>
-            <button type="button" id="set-open-folder">打开下载文件夹</button>
-            <button type="button" id="set-rules">编辑拦截规则…</button>
-            <button type="button" id="set-adblock">广告拦截：开</button>
-          </div>
         </div>
         <button type="button" class="icon-btn" id="external" disabled title="Open externally" aria-label="Open externally">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5"/><path d="M19 5l-9 9"/><path d="M5 9v10h10"/></svg>
@@ -301,12 +263,6 @@
       const downloadsPop = document.getElementById("dl-pop");
       const downloadsList = document.getElementById("dl-list");
       const downloadsTitle = document.getElementById("dl-title");
-      const settingsButton = document.getElementById("settings");
-      const settingsPop = document.getElementById("set-pop");
-      const setFolder = document.getElementById("set-folder");
-      const setOpenFolder = document.getElementById("set-open-folder");
-      const setRules = document.getElementById("set-rules");
-      const setAdblock = document.getElementById("set-adblock");
       let downloadCount = 0;
       const empty = document.getElementById("empty");
       const emptyTitle = document.getElementById("empty-title");
@@ -478,44 +434,8 @@
           return;
         }
         downloadsPop.hidden = !downloadsPop.hidden;
-        settingsPop.hidden = true;
       });
 
-      const refreshAdblockLabel = async () => {
-        try {
-          const state = await bridge.invoke("browser.adblockState");
-          setAdblock.textContent = `广告拦截：${state && state.enabled ? "开" : "关"}`;
-        } catch {
-          setAdblock.textContent = "广告拦截";
-        }
-      };
-      settingsButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        settingsPop.hidden = !settingsPop.hidden;
-        downloadsPop.hidden = true;
-        if (!settingsPop.hidden) void refreshAdblockLabel();
-      });
-      setFolder.addEventListener("click", () => {
-        settingsPop.hidden = true;
-        void bridge.invoke("browser.chooseDownloadFolder");
-      });
-      setOpenFolder.addEventListener("click", () => {
-        settingsPop.hidden = true;
-        void bridge.invoke("browser.openDownloadsFolder");
-      });
-      setRules.addEventListener("click", () => {
-        settingsPop.hidden = true;
-        void bridge.invoke("browser.openAdblockRules");
-      });
-      setAdblock.addEventListener("click", async () => {
-        try {
-          const state = await bridge.invoke("browser.adblockState");
-          await bridge.invoke("browser.setAdblock", { enabled: !(state && state.enabled) });
-        } catch {
-          /* 开关失败时保持原状 */
-        }
-        await refreshAdblockLabel();
-      });
       downloadsList.addEventListener("click", (event) => {
         const id = event.target?.dataset?.cancel;
         if (!id) return;
@@ -524,9 +444,6 @@
       document.addEventListener("click", (event) => {
         if (!downloadsPop.hidden && !downloadsPop.contains(event.target) && event.target !== downloadsButton) {
           downloadsPop.hidden = true;
-        }
-        if (!settingsPop.hidden && !settingsPop.contains(event.target) && event.target !== settingsButton) {
-          settingsPop.hidden = true;
         }
       });
 

@@ -49,8 +49,18 @@ import type { IpcRegistrar } from "./types";
 import type { createTraySessions } from "../tray-sessions";
 import type { createTaskbarUnreadBadge } from "../taskbar-unread-badge";
 
+/** 应用设置页里的「浏览器」分组：广告拦截开关、下载目录、拦截名单。 */
+export type BrowserSettingsBridge = {
+  get: () => { enabled: boolean; downloadsDir: string };
+  setAdblock: (enabled: boolean) => { enabled: boolean };
+  openDownloadsFolder: () => void;
+  chooseDownloadsFolder: () => Promise<{ directory: string | null }>;
+  openAdblockRules: () => void;
+};
+
 export type RegisterIpcDependencies = {
   isQuitting: () => boolean;
+  browserSettings: BrowserSettingsBridge;
   ipcMain: IpcMain;
   getMainWindow: () => BrowserWindow | null;
   getHost: () => HostProcess | null;
@@ -197,6 +207,7 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     mcpOAuth,
     refreshUserMcp,
     describeError,
+    browserSettings,
     pluginViews,
     pluginScopes,
     rememberPluginScopes,
@@ -324,6 +335,19 @@ export function registerIpcHandlers(dependencies: RegisterIpcDependencies) {
     applyUpdatePreference: (preference) => updater.setPreference(preference),
     resolveEffectiveCommandShell,
     liveCallService,
+  });
+  handle(IPC.invoke.browserSettingsGet, async () => browserSettings.get());
+  handle(IPC.invoke.browserSettingsSet, async (payload?: { enabled?: unknown }) =>
+    browserSettings.setAdblock(payload?.enabled === true));
+  handle(IPC.invoke.browserDownloadsFolderOpen, async () => {
+    browserSettings.openDownloadsFolder();
+    return { ok: true };
+  });
+  handle(IPC.invoke.browserDownloadsFolderChoose, async () =>
+    browserSettings.chooseDownloadsFolder());
+  handle(IPC.invoke.browserBlockListOpen, async () => {
+    browserSettings.openAdblockRules();
+    return { ok: true };
   });
   registerConfigSyncIpc({
     registrar,

@@ -58,6 +58,13 @@ import { hasSingleInstanceLock, isDevelopmentBuild } from "./installation";
 import { getStorageBootstrap } from "./storage/bootstrap";
 import { createPlanUiProbe } from "./plan-ui-probe";
 import { registerIpcHandlers } from "./ipc/register";
+import { activeDownloadsDir, downloadRegistry } from "./browser-downloads";
+import {
+  browserAdblockState,
+  openBrowserAdblockRules,
+  openBrowserDownloadsFolder,
+  setBrowserAdblock,
+} from "./browser-view";
 import { createVoiceService } from "./voice-service";
 import { MicrophoneLeaseRegistry } from "./live-voice/microphone-lease";
 import { createLiveCallService } from "./live-voice/runtime";
@@ -975,6 +982,17 @@ const localApps: LocalAppCatalog = {
 
 function registerIpc() {
   return registerIpcHandlers({
+    // 浏览器设置（应用设置页里的「浏览器」分组）统一从这里进出。
+    browserSettings: {
+      get: () => ({
+        ...browserAdblockState(),
+        downloadsDir: activeDownloadsDir(),
+      }),
+      setAdblock: (enabled: boolean) => setBrowserAdblock(enabled),
+      openDownloadsFolder: () => openBrowserDownloadsFolder(),
+      chooseDownloadsFolder: async () => ({ directory: await downloadRegistry.chooseDirectory() }),
+      openAdblockRules: () => openBrowserAdblockRules(),
+    },
     modeServices,
     restartForStorage: () => {
       shutdownState.quitConfirmed = true;
