@@ -2016,6 +2016,25 @@
   unicode-bidi: isolate;
 }
 
+/* #2635: a reply written in Arabic stayed glued to the left margin. Each block
+   takes its direction from its own first strong character, and `text-align:
+   start` then aligns it to that side, so an Arabic paragraph reads from the
+   right while an English one keeps its left edge. */
+.prose-chat p,
+.prose-chat li,
+.prose-chat blockquote,
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4,
+.prose-chat h5,
+.prose-chat h6,
+.prose-chat td,
+.prose-chat th {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
 /* #2388: typed composer paragraphs follow the first strong character of the
    paragraph itself (per-paragraph auto direction), the standard editor
    behavior for mixed RTL/LTR drafts. */
