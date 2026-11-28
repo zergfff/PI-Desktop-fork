@@ -109,6 +109,26 @@ function captureScratchDir(): string {
   return join(desktopDataDir(), "scratch");
 }
 
+/**
+ * "Loaded, but nothing on screen" is the failure mode users cannot describe —
+ * a white pane with no error. Measure the document once a load settles.
+ */
+const BLANK_PAGE_PROBE = `(() => {
+  try {
+    const body = document.body;
+    if (!body) return { blank: true, reason: "body" };
+    const text = (body.innerText || "").trim();
+    if (text.length > 0) return { blank: false };
+    const painted = Array.from(body.querySelectorAll("*")).some((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.width > 80 && rect.height > 40;
+    });
+    return { blank: !painted, reason: painted ? "" : "content" };
+  } catch {
+    return { blank: false };
+  }
+})()`;
+
 function ensureAdblock(session: Electron.Session): void {
   if (adblockSessions.has(session)) return;
   adblockSessions.add(session);
@@ -240,7 +260,7 @@ export class BrowserPane {
   private stateUrl: string | null = null;
   private nativeNavigationPending = false;
   private pendingTarget: string | null = null;
-  private loadError: { url: string; message: string } | null = null;
+  private loadError: { url: string; message: string; detail?: string } | null = null;
   private cancelPending: (() => void) | null = null;
   /** Per-pane page zoom; the panel keeps its own factor. */
   private zoomFactor = 1;
@@ -290,7 +310,9 @@ export class BrowserPane {
       url: this.loadError?.url ?? this.pendingTarget ?? wc.getURL(),
       title: wc.getTitle(),
       isLoading: !this.loadError && (this.pendingTarget !== null || wc.isLoading()),
-      ...(this.loadError ? { loadError: this.loadError.message } : {}),
+      ...(this.loadError
+        ? { loadError: this.loadError.message, loadErrorDetail: this.loadError.detail }
+        : {}),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
       ...(readAdblockEnabled(adblockDir())
@@ -440,7 +462,10 @@ export class BrowserPane {
         if (started && mainFrame && !inPlace && epoch === this.navigationEpoch) destinations.add(url);
       };
       const onFailure = (_event: unknown, code: number, description: string, url: string, mainFrame: boolean) => {
-        if (mainFrame !== false && code !== -3 && destinations.has(url)) finish(false, description);
+        if (mainFrame !== false && code !== -3 && destinations.has(url)) {
+          // 带错误码一起记：只有描述时"什么都没显示"无从下手。
+          finish(false, `${description} (${code})`);
+        }
       };
       const onCommit = (_event: unknown, url: string) => {
         // A current main-frame commit is ready to display even if images or
@@ -1068,7 +1093,26 @@ export class BrowserPane {
       if (state) this.onState(state);
     };
     wc.on("did-start-loading", push);
-    wc.on("did-stop-loading", push);
+    wc.on("did-stop-loading", () => {
+      push();
+      // One measurement per settle: if the document is empty, say so in the pane
+      // instead of leaving a white rectangle behind.
+      void wc
+        .executeJavaScript(BLANK_PAGE_PROBE, true)
+        .then((result: unknown) => {
+          const info = result as { blank?: boolean; reason?: unknown } | null;
+          if (!info || info.blank !== true || this.loadError) return;
+          const url = wc.getURL();
+          if (!isAllowedHttpUrl(url)) return;
+          this.loadError = {
+            url,
+            message: "EMPTY_PAGE",
+            detail: typeof info.reason === "string" && info.reason ? `no ${info.reason}` : undefined,
+          };
+          push();
+        })
+        .catch(() => {});
+    });
     wc.on("did-navigate", (_event, url) => {
       if (this.acceptNativeNavigation(url)) push();
     });
@@ -1092,6 +1136,12 @@ export class BrowserPane {
         // Replacing a still-loading document aborts its old request. That
         // event must not consume the pending navigation to the new document.
         if (isMainFrame === false || _errorCode === -3) return;
+        // 页面没画出来时要能说清原因：错误码、描述、URL 一起留在状态里。
+        this.loadError = {
+          url: validatedUrl,
+          message: String(_errorDescription || "LOAD_FAILED"),
+          detail: `code ${_errorCode}`,
+        };
         if (this.acceptNativeNavigation(validatedUrl)) push();
       },
     );

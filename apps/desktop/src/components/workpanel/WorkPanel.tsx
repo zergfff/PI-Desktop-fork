@@ -41,6 +41,8 @@ import { TooltipButton } from "../ui";
 import type { IconProps } from "../icons";
 import {
   IconBot,
+  IconChevronDown,
+  IconChevronUp,
   IconClose,
   IconDiff,
   IconFileText,
@@ -265,6 +267,21 @@ function LocalWorkPanel({
   const tabButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const tabCloseButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const newTabButtonRef = useRef<HTMLButtonElement | null>(null);
+  // 标签条可以折叠：Chrome/Firefox 的标签区都能收起来，标签一多时很实用。
+  const [tabStripCollapsed, setTabStripCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem("pi.workPanel.tabStripCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("pi.workPanel.tabStripCollapsed", tabStripCollapsed ? "1" : "0");
+    } catch {
+      /* 隐私模式下 localStorage 可能拒绝写入，折叠状态就只在本次运行有效 */
+    }
+  }, [tabStripCollapsed]);
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{
     tabId: string;
@@ -946,7 +963,12 @@ function LocalWorkPanel({
         onDoubleClick={onPanelResizeReset}
       />
       <div className="work-panel-main">
-        <header className="work-panel-header">
+        <header className={cx("work-panel-header", tabStripCollapsed && "tabs-collapsed")}>
+          {tabStripCollapsed && activeTab && (
+            <div className="work-panel-collapsed-label" title={tabLabel(activeTab, t, pluginViews)}>
+              {tabLabel(activeTab, t, pluginViews)}
+            </div>
+          )}
           <div className="work-panel-tab-strip-wrap">
               <div
                 ref={tabStripRef}
@@ -1063,6 +1085,16 @@ function LocalWorkPanel({
               </div>
           </div>
           <div className="work-panel-actions no-drag">
+            <TooltipButton
+              type="button"
+              className="work-panel-tabs-toggle"
+              tooltip={tabStripCollapsed ? "展开标签页" : "折叠标签页"}
+              ariaLabel={tabStripCollapsed ? "展开标签页" : "折叠标签页"}
+              aria-pressed={tabStripCollapsed}
+              onClick={() => setTabStripCollapsed((current) => !current)}
+            >
+              {tabStripCollapsed ? <IconChevronDown size={15} /> : <IconChevronUp size={15} />}
+            </TooltipButton>
               <TooltipButton
                 ref={newTabButtonRef}
                 type="button"

@@ -272,3 +272,15 @@ html.pi-preview-only .pdf-layout {
   font-size: 11px;
   padding: 0 2px !important;
 }
+
+/* 上一页/下一页按钮去掉：页码输入框和总页数已经能定位，两个箭头纯占地方。 */
+html.pi-preview-only .pdf-navigation [title="上一页"],
+html.pi-preview-only .pdf-navigation [title="下一页"],
+html.pi-preview-only .pdf-navigation [title="Previous page"],
+html.pi-preview-only .pdf-navigation [title="Next page"],
+html.pi-preview-only .pdf-navigation [aria-label="上一页"],
+html.pi-preview-only .pdf-navigation [aria-label="下一页"],
+html.pi-preview-only .pdf-navigation [aria-label="Previous page"],
+html.pi-preview-only .pdf-navigation [aria-label="Next page"] {
+  display: none !important;
+}

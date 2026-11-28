@@ -1155,3 +1155,25 @@
   font-size: var(--text-xs);
   color: var(--muted);
 }
+
+/* 折叠标签条：只留当前标签的名字 + 展开按钮，给正文腾出整条高度。 */
+.work-panel-header.tabs-collapsed .work-panel-tab-strip-wrap {
+  display: none;
+}
+
+.work-panel-collapsed-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-left: 10px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-panel-tabs-toggle[aria-pressed="true"] {
+  color: var(--foreground);
+}

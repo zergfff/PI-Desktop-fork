@@ -350,8 +350,12 @@
         empty.hidden = started && !state?.isLoading;
         const phase = state?.loadError === "ERR_ABORTED" ? "stopped" : state?.loadError ? "failed" : state?.isLoading ? "loading" : "empty";
         emptyTitle.textContent = t(`${phase}Title`);
+        // 页面没加载出来时把原因也说出来，别让人对着空白猜。
         emptyBody.textContent = state?.loadError === "LOCAL_FILE_NOT_ALLOWED"
-          ? t("localFileBody") : t(`${phase}Body`);
+          ? t("localFileBody")
+          : state?.loadError
+            ? `${state.loadError}${state.loadErrorDetail ? ` · ${state.loadErrorDetail}` : ""}`
+            : t(`${phase}Body`);
         back.disabled = !state?.canGoBack;
         forward.disabled = !state?.canGoForward;
         reload.disabled = !started;
