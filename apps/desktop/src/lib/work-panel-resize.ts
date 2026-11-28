@@ -167,7 +167,11 @@ export function workPanelLayout({
     0,
     width - leftWidth - MAIN_PANE_MIN_WIDTH,
   );
-  const panelWidth = Math.min(requested, maxPanelWidth);
+  // Opening the panel must never produce a sliver: a 0-em wide column looks
+  // exactly like "nothing happens". When the window cannot satisfy both the
+  // chat floor and the panel, the panel the user just opened wins.
+  const panelFloor = Math.min(WORK_PANEL_MIN_WIDTH, Math.max(0, width - leftWidth));
+  const panelWidth = Math.max(Math.min(requested, maxPanelWidth), panelFloor);
   return {
     mainWidth: Math.max(0, width - leftWidth - panelWidth),
     panelWidth,

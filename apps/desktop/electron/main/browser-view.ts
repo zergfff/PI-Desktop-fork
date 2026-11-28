@@ -570,7 +570,16 @@ export class BrowserPane {
   }
 
   private attach(): void {
-    if (!this.window || this.window.isDestroyed() || !this.surface) return;
+    // A pane created before its host learned about the window (session restore,
+    // plugin view opened early) would otherwise stay parked forever: the panel
+    // chrome renders, the page never appears.
+    if (!this.window || this.window.isDestroyed()) {
+      const owner = BrowserWindow.getFocusedWindow()
+        ?? BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+      if (!owner) return;
+      this.window = owner;
+    }
+    if (!this.surface) return;
     if (this.attachedWindow !== this.window) this.detach();
     const children = this.window.contentView.children;
     // Keep the guest above its plugin chrome, but confined to the measured hole.

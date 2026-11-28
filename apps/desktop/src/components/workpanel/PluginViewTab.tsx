@@ -73,7 +73,12 @@ export function PluginViewTab({
     const open = () => {
       void api.pluginViewOpen(pluginId, viewId, { sessionId, location: locationRef.current, tabId }).then(
         () => {
-          if (current) setFailed(false);
+          if (!current) return;
+          setFailed(false);
+          // The first bounds report ran before the view existed, and a ResizeObserver
+          // in an unbroken layout never fires again — the native view would stay
+          // parked behind an empty rectangle. Report once the view is open.
+          reportBounds();
         },
         () => {
           if (current) setFailed(true);
